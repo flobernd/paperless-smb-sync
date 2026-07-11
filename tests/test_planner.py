@@ -169,3 +169,44 @@ def test_uid_mismatch_warned_not_touched():
     plan = plan_cycle(desired, provisioned_state(username="alice", user_id=5), UID_BASE)
     assert not any(isinstance(a, (DeleteAccount, RenameUser)) for a in plan.actions)
     assert any("uid" in w.lower() for w in plan.warnings)
+
+
+def test_invalid_rename_preserves_existing_resources():
+    desired = [PaperlessUser(5, "alice@example.com", True)]
+    plan = plan_cycle(desired, provisioned_state(), UID_BASE)
+    assert plan.actions == ()
+    assert any("alice@example.com" in w for w in plan.warnings)
+
+
+def test_rename_with_deactivation_disables_new_name():
+    desired = [PaperlessUser(5, "dave", False)]
+    plan = plan_cycle(
+        desired, provisioned_state(username="alice", enabled=True), UID_BASE
+    )
+    assert plan.actions == (
+        RenameUser(
+            old_username="alice",
+            new_username="dave",
+            uid=20005,
+            user_id=5,
+            workflow_id=7,
+        ),
+        DisableAccount(username="dave"),
+    )
+
+
+def test_rename_with_reactivation_enables_new_name():
+    desired = [PaperlessUser(5, "dave", True)]
+    plan = plan_cycle(
+        desired, provisioned_state(username="alice", enabled=False), UID_BASE
+    )
+    assert plan.actions == (
+        RenameUser(
+            old_username="alice",
+            new_username="dave",
+            uid=20005,
+            user_id=5,
+            workflow_id=7,
+        ),
+        EnableAccount(username="dave"),
+    )

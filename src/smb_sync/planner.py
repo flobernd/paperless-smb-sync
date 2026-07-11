@@ -27,10 +27,14 @@ def plan_cycle(
     warnings: list[str] = []
 
     valid: list[PaperlessUser] = []
+    # uids of skipped users still protect their resources: a rename to an
+    # invalid name must not tear down what the old name provisioned
+    invalid_uids: set[int] = set()
     for user in desired:
         if _VALID_USERNAME.match(user.username):
             valid.append(user)
         else:
+            invalid_uids.add(uid_base + user.id)
             warnings.append(
                 f"user '{user.username}' is not a valid unix account name; "
                 f"skipped (rename the user in paperless to provision it)"
@@ -64,6 +68,12 @@ def plan_cycle(
                     )
                 )
                 renamed_from.add(holder.username)
+                # the executor renames before the state change, so the
+                # enable/disable action targets the new name
+                if holder.enabled and not user.is_active:
+                    actions.append(DisableAccount(username=user.username))
+                elif not holder.enabled and user.is_active:
+                    actions.append(EnableAccount(username=user.username))
                 continue
             actions.append(CreateAccount(user=user, uid=uid))
             if user.username not in folder_names:
@@ -88,10 +98,12 @@ def plan_cycle(
         if user.username not in workflows_by_username:
             actions.append(CreateWorkflow(user_id=user.id, username=user.username))
 
+    protected_names = {a.username for a in actual.accounts if a.uid in invalid_uids}
     stale_accounts = {
         a.username
         for a in actual.accounts
         if a.uid >= uid_base
+        and a.uid not in invalid_uids
         and a.username not in desired_names
         and a.username not in renamed_from
     }
@@ -99,6 +111,7 @@ def plan_cycle(
         f.name
         for f in actual.folders
         if f.uid >= uid_base
+        and f.uid not in invalid_uids
         and f.name not in desired_names
         and f.name not in renamed_from
     }
@@ -134,6 +147,7 @@ def plan_cycle(
             workflow.username not in desired_names
             and workflow.username not in renamed_from
             and workflow.username not in deprovisioned
+            and workflow.username not in protected_names
         ):
             actions.append(DeleteWorkflow(workflow_id=workflow.id))
 

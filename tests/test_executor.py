@@ -16,13 +16,14 @@ from smb_sync.system import CommandError
 
 
 class FakeSystem:
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, fail_with=CommandError):
         self.calls = []
         self.fail_on = fail_on
+        self.fail_with = fail_with
 
     def _record(self, name, *args):
         if name == self.fail_on:
-            raise CommandError(f"{name} failed")
+            raise self.fail_with(f"{name} failed")
         self.calls.append((name, *args))
 
     def create_unix_user(self, username, uid):
@@ -176,3 +177,30 @@ def test_failure_is_isolated_and_counted():
     )
     assert failures == 1
     assert ("delete_inbox_folder", "bob") in system.calls
+
+
+def test_unexpected_exception_is_isolated_and_counted():
+    system = FakeSystem(fail_on="disable_samba_account", fail_with=RuntimeError)
+    failures, system, _ = run(
+        [
+            DisableAccount(username="alice"),
+            DeleteFolder(username="bob"),
+        ],
+        system=system,
+    )
+    assert failures == 1
+    assert ("delete_inbox_folder", "bob") in system.calls
+
+
+def test_multiple_failures_accumulate():
+    system = FakeSystem(fail_on="disable_samba_account")
+    failures, system, _ = run(
+        [
+            DisableAccount(username="alice"),
+            DisableAccount(username="bob"),
+            DeleteFolder(username="carol"),
+        ],
+        system=system,
+    )
+    assert failures == 2
+    assert ("delete_inbox_folder", "carol") in system.calls

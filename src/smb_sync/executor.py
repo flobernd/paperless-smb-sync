@@ -14,8 +14,8 @@ from .model import (
     EnableAccount,
     RenameUser,
 )
-from .paperless import PaperlessClient, PaperlessError
-from .system import CommandError, SystemAdapter
+from .paperless import PaperlessClient
+from .system import SystemAdapter
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def execute(
     for action in actions:
         try:
             _apply(action, system, api, smb_host=smb_host, share_name=share_name)
-        except (CommandError, PaperlessError, OSError) as exc:
+        except Exception as exc:
             failures += 1
             log.error("action %r failed: %s", action, exc)
     return failures

@@ -96,12 +96,12 @@ All configuration is via environment variables, read in
 | `UID_BASE` | `20000` | Base for the unix UID of managed accounts; a user's UID is `UID_BASE` plus their paperless user id. |
 | `PAPERLESS_GID` | `10000` | GID of the shared `paperless` group that owns every inbox folder. |
 | `SHARE_NAME` | `inbox` | Name of the exported SMB share. |
-| `SMB_HOST` | empty | Hostname or IP shown in the printed credentials block and in `smb-sync status`; display only, it does not affect how the share is served. |
+| `SMB_HOST` | empty | Hostname or IP shown in the printed credentials block (provisioning log and `smb-sync regen` output); display only, it does not affect how the share is served. |
 | `INBOX_PATH` | `/shares/inbox` | Path inside the container where the sync daemon creates and manages per-user inbox folders. The share definition and the container's `mkdir` at startup both use the fixed path `/shares/inbox`, so this normally only needs to match the volume mount target and does not need to be changed. |
 
 The admin API token needs permission to read users, groups, and workflows,
-and to create and delete workflows; an administrator account's token is the
-simplest choice.
+and to create, update, and delete workflows; an administrator account's
+token is the simplest choice.
 
 ## Setup
 
@@ -114,11 +114,14 @@ simplest choice.
    `PAPERLESS_API_TOKEN_FILE` instead), and point the `/shares/inbox` volume
    at the same host directory the paperless consumer watches.
 4. Start it: `docker compose up -d --build`.
-5. Add users to the `smb` group in paperless. Within one `POLL_INTERVAL`,
-   each newly added user is provisioned and their one-time credentials block
-   is written to the container log; read it with `docker logs <container>`.
-6. Enter the printed server, share path, username, and password into the
-   scanner's SMB profile for that user.
+5. Add users to the `smb` group in paperless.
+6. Read each user's one-time credentials block with `docker logs
+   <container>` and enter the printed server, share path, username, and
+   password into the scanner's SMB profile.
+
+Each user is provisioned within one `POLL_INTERVAL` of joining the group;
+the credentials block appears in the container log at that moment and is
+not printed again.
 
 ## Admin commands
 
@@ -144,14 +147,15 @@ maintained accounts. Moving to this container is a one-time procedure:
 2. Create an admin API token as described in Setup above.
 3. In your compose file, replace the `servercontainers/samba` service with
    this one, keep the existing bind mount to the shared inbox directory, and
-   add the named volume for `/var/lib/samba` shown in
-   `compose.example.yaml`. This volume holds `passdb.tdb`, Samba's own
-   credential store, and must persist across restarts.
-4. Start the container. Because existing paperless passwords cannot be
-   reused for Samba, the first reconcile cycle generates a new password for
-   every existing user and prints their credentials blocks to the log as if
-   they were newly provisioned. Update each scanner profile once with the
-   new password.
+   add the named volume for `/var/lib/samba` shown in `compose.example.yaml`.
+4. Start the container and update each scanner profile once with the new
+   credentials from the log.
+
+The `/var/lib/samba` volume holds `passdb.tdb`, Samba's own credential
+store, and must persist across restarts. Existing paperless passwords
+cannot be reused for Samba, so the first reconcile cycle generates a new
+password for every existing user and prints their credentials blocks to the
+log as if they were newly provisioned.
 
 Existing documents and inbox folders are not touched by the migration; only
 the account and password layer changes.

@@ -19,6 +19,9 @@ from .model import (
 # useradd-compatible names only; anything else is skipped with a warning
 _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
+# (uid_t)-1: pdbedit's marker for a passdb entry whose unix account is missing
+_UNMAPPED_UID = 4294967295
+
 
 def plan_cycle(
     desired: list[PaperlessUser], actual: ActualState, uid_base: int
@@ -99,10 +102,44 @@ def plan_cycle(
             actions.append(CreateWorkflow(user_id=user.id, username=user.username))
 
     protected_names = {a.username for a in actual.accounts if a.uid in invalid_uids}
+
+    # an unmapped uid means the unix account is gone, likely a rename that
+    # crashed halfway; the passdb entry holds the only copy of the NT hash,
+    # so deprovisioning it would make the rename unrecoverable
+    for account in actual.accounts:
+        if (
+            account.uid == _UNMAPPED_UID
+            and account.username not in desired_names
+            and account.username not in renamed_from
+        ):
+            warnings.append(
+                f"samba account '{account.username}' has no unix account "
+                f"(possibly an interrupted rename); left untouched"
+            )
+
+    # a folder carrying the uid a desired user maps to still holds that
+    # user's data even under a stale name (half-completed rename), so it
+    # must never be deleted
+    expected_uid_owner = {uid_base + u.id: u.username for u in valid}
+    held_folder_names: set[str] = set()
+    for folder in actual.folders:
+        if (
+            folder.uid in expected_uid_owner
+            and folder.name not in desired_names
+            and folder.name not in renamed_from
+        ):
+            held_folder_names.add(folder.name)
+            warnings.append(
+                f"folder '{folder.name}' has uid {folder.uid} belonging to "
+                f"user '{expected_uid_owner[folder.uid]}' (possibly an "
+                f"interrupted rename); left untouched"
+            )
+
     stale_accounts = {
         a.username
         for a in actual.accounts
         if a.uid >= uid_base
+        and a.uid != _UNMAPPED_UID
         and a.uid not in invalid_uids
         and a.username not in desired_names
         and a.username not in renamed_from
@@ -114,6 +151,7 @@ def plan_cycle(
         and f.uid not in invalid_uids
         and f.name not in desired_names
         and f.name not in renamed_from
+        and f.name not in held_folder_names
     }
     for folder in actual.folders:
         if (

@@ -195,6 +195,32 @@ def test_rename_with_deactivation_disables_new_name():
     )
 
 
+def test_unmapped_uid_account_frozen_with_warning():
+    # pdbedit reports (uid_t)-1 for entries whose unix account is gone,
+    # e.g. after an interrupted rename; deleting it would destroy the
+    # only remaining copy of the NT hash
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 4294967295, True),),
+        folders=(),
+        workflows=(),
+    )
+    plan = plan_cycle([], actual, UID_BASE)
+    assert plan.actions == ()
+    assert any("alice" in w and "rename" in w for w in plan.warnings)
+
+
+def test_stale_folder_with_desired_uid_frozen_with_warning():
+    # in a half-completed rename the old folder still carries the real
+    # uid of a desired user; deleting it would destroy that user's data
+    desired = [PaperlessUser(5, "dave", True)]
+    actual = ActualState(
+        accounts=(), folders=(InboxFolder("alice", 20005),), workflows=()
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert DeleteFolder(username="alice") not in plan.actions
+    assert any("alice" in w and "dave" in w for w in plan.warnings)
+
+
 def test_rename_with_reactivation_enables_new_name():
     desired = [PaperlessUser(5, "dave", True)]
     plan = plan_cycle(

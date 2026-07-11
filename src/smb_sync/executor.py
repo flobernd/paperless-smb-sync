@@ -85,7 +85,7 @@ def _apply(
             user_id=user_id,
             workflow_id=workflow_id,
         ):
-            system.rename_samba_account(old, new)
+            system.rename_samba_account(old, new, uid)
             system.rename_inbox_folder(old, new)
             if workflow_id is not None:
                 api.rename_workflow(workflow_id, user_id, new)

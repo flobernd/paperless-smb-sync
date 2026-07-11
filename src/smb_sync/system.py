@@ -123,19 +123,35 @@ class SystemAdapter:
     def enable_samba_account(self, username: str) -> None:
         self._run(["smbpasswd", "-e", username])
 
-    def rename_samba_account(self, old: str, new: str) -> None:
-        # tdbsam resolves the passdb uid via getpwnam(username), so the
-        # export must happen before the unix rename below: once "old" no
-        # longer resolves, pdbedit returns a placeholder uid (4294967295)
-        # and the reimport silently fails. The old entry is deleted last
-        # so a crash never loses the account.
-        output = self._run(["pdbedit", "-L", "-w", "-u", old])
-        lines = output.strip().splitlines()
-        if not lines:
+    def rename_samba_account(self, old: str, new: str, uid: int) -> None:
+        # tdbsam cannot rename in place, so the hash line is re-imported
+        # under the new name and the old entry is deleted only after the
+        # import succeeded. Every step is guarded, so re-invoking after
+        # any interruption converges; a crash between usermod and import
+        # leaves the account unusable until the next attempt or a manual
+        # fix, but never deletes anything.
+        # Export from the full listing because pdbedit resolves uids via
+        # getpwnam and a half-completed rename leaves the old name
+        # unmapped (uid becomes 4294967295, and -u lookups fail).
+        output = self._run(["pdbedit", "-L", "-w"])
+        lines = {
+            line.split(":", 1)[0]: line
+            for line in output.splitlines()
+            if ":" in line
+        }
+        if new in lines:
+            if old in lines:
+                self._run(["pdbedit", "-x", "-u", old])
+            return
+        if old not in lines:
             raise CommandError(f"samba account '{old}' not found")
-        parts = lines[0].split(":")
+        parts = lines[old].split(":")
         parts[0] = new
-        self._run(["usermod", "--login", new, old])
+        parts[1] = str(uid)  # exported uid is unreliable once getpwnam(old) fails
+        try:
+            pwd.getpwnam(new)
+        except KeyError:
+            self._run(["usermod", "--login", new, old])
         fd, temp_path = tempfile.mkstemp(suffix=".smbpasswd")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:

@@ -44,8 +44,8 @@ class FakeSystem:
     def enable_samba_account(self, username):
         self._record("enable_samba_account", username)
 
-    def rename_samba_account(self, old, new):
-        self._record("rename_samba_account", old, new)
+    def rename_samba_account(self, old, new, uid):
+        self._record("rename_samba_account", old, new, uid)
 
     def create_inbox_folder(self, username, uid):
         self._record("create_inbox_folder", username, uid)
@@ -140,7 +140,7 @@ def test_rename_sequence_and_workflow_update():
     )
     assert failures == 0
     assert system.calls == [
-        ("rename_samba_account", "alice", "dave"),
+        ("rename_samba_account", "alice", "dave", 20005),
         ("rename_inbox_folder", "alice", "dave"),
     ]
     assert api.calls == [("rename_workflow", 7, 5, "dave")]

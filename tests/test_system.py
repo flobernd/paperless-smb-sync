@@ -121,12 +121,17 @@ def test_rename_samba_account_exports_imports_then_deletes(tmp_path):
     )
     adapter.rename_samba_account("alice", "dave")
     assert run.import_file_content == "dave:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
+    # the unix rename must run between the export and the import: pdbedit
+    # resolves the passdb uid via getpwnam, so it has to see the old name
+    # for the export and the new name for the import
     assert [c[0][:2] for c in run.calls] == [
         ("pdbedit", "-L"),
+        ("usermod", "--login"),
         ("pdbedit", "-i"),
         ("pdbedit", "-x"),
     ]
-    assert run.calls[2][0] == ("pdbedit", "-x", "-u", "alice")
+    assert run.calls[1][0] == ("usermod", "--login", "dave", "alice")
+    assert run.calls[3][0] == ("pdbedit", "-x", "-u", "alice")
 
 
 def test_rename_inbox_folder(tmp_path):

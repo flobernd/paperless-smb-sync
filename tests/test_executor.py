@@ -32,9 +32,6 @@ class FakeSystem:
     def delete_unix_user(self, username):
         self._record("delete_unix_user", username)
 
-    def rename_unix_user(self, old, new):
-        self._record("rename_unix_user", old, new)
-
     def set_samba_password(self, username, password, create=False):
         self._record("set_samba_password", username, password, create)
 
@@ -143,7 +140,6 @@ def test_rename_sequence_and_workflow_update():
     )
     assert failures == 0
     assert system.calls == [
-        ("rename_unix_user", "alice", "dave"),
         ("rename_samba_account", "alice", "dave"),
         ("rename_inbox_folder", "alice", "dave"),
     ]

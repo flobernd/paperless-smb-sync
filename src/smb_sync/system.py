@@ -103,9 +103,6 @@ class SystemAdapter:
             return
         self._run(["userdel", username])
 
-    def rename_unix_user(self, old: str, new: str) -> None:
-        self._run(["usermod", "--login", new, old])
-
     # -- samba accounts ----------------------------------------------
 
     def set_samba_password(
@@ -127,14 +124,18 @@ class SystemAdapter:
         self._run(["smbpasswd", "-e", username])
 
     def rename_samba_account(self, old: str, new: str) -> None:
-        # tdbsam cannot rename; re-import the hash line under the new name
-        # and delete the old entry last so a crash never loses the account
+        # tdbsam resolves the passdb uid via getpwnam(username), so the
+        # export must happen before the unix rename below: once "old" no
+        # longer resolves, pdbedit returns a placeholder uid (4294967295)
+        # and the reimport silently fails. The old entry is deleted last
+        # so a crash never loses the account.
         output = self._run(["pdbedit", "-L", "-w", "-u", old])
         lines = output.strip().splitlines()
         if not lines:
             raise CommandError(f"samba account '{old}' not found")
         parts = lines[0].split(":")
         parts[0] = new
+        self._run(["usermod", "--login", new, old])
         fd, temp_path = tempfile.mkstemp(suffix=".smbpasswd")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:

@@ -19,11 +19,20 @@ class FakeResponse:
             raise requests.HTTPError(f"status {self.status_code}")
 
 
+class BrokenJsonResponse(FakeResponse):
+    def __init__(self):
+        super().__init__(None)
+
+    def json(self):
+        raise ValueError("invalid body")
+
+
 class FakeSession:
     """Route by exact URL; records every write request."""
 
-    def __init__(self, routes):
+    def __init__(self, routes, delete_status=204):
         self.routes = routes
+        self.delete_status = delete_status
         self.headers = {}
         self.requests = []
 
@@ -40,7 +49,7 @@ class FakeSession:
 
     def delete(self, url, timeout=None):
         self.requests.append(("DELETE", url, None))
-        return FakeResponse({}, 204)
+        return FakeResponse({}, self.delete_status)
 
 
 BASE = "http://paperless:8000"
@@ -103,6 +112,18 @@ def test_http_error_raises_paperless_error():
         client.fetch_desired_users("smb")
 
 
+def test_non_json_body_raises_paperless_error():
+    client, _ = make_client({f"{BASE}/api/groups/": BrokenJsonResponse()})
+    with pytest.raises(PaperlessError, match="unexpected body"):
+        client.fetch_desired_users("smb")
+
+
+def test_missing_results_key_raises_paperless_error():
+    client, _ = make_client({f"{BASE}/api/groups/": FakeResponse({"next": None})})
+    with pytest.raises(PaperlessError, match="unexpected body"):
+        client.fetch_desired_users("smb")
+
+
 def test_fetch_managed_workflows_filters_prefix():
     client, _ = make_client(
         {
@@ -136,6 +157,13 @@ def test_create_workflow_payload():
 
 def test_delete_workflow():
     client, session = make_client({})
+    client.delete_workflow(7)
+    assert session.requests == [("DELETE", f"{BASE}/api/workflows/7/", None)]
+
+
+def test_delete_workflow_tolerates_404():
+    session = FakeSession({}, delete_status=404)
+    client = PaperlessClient(BASE, "tok", session=session)
     client.delete_workflow(7)
     assert session.requests == [("DELETE", f"{BASE}/api/workflows/7/", None)]
 

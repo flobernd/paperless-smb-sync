@@ -57,11 +57,15 @@ class PaperlessClient:
             try:
                 response = self._session.get(url, timeout=_TIMEOUT)
                 response.raise_for_status()
+                payload = response.json()
+                results.extend(payload["results"])
+                url = payload.get("next")
             except requests.RequestException as exc:
                 raise PaperlessError(f"GET {url} failed: {exc}") from exc
-            payload = response.json()
-            results.extend(payload["results"])
-            url = payload.get("next")
+            except (ValueError, KeyError, TypeError) as exc:
+                raise PaperlessError(
+                    f"GET {url} returned an unexpected body: {exc}"
+                ) from exc
         return results
 
     def fetch_desired_users(self, group_name: str) -> list[PaperlessUser]:

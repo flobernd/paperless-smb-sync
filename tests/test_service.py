@@ -1,7 +1,9 @@
+import pytest
+
 from smb_sync.config import Config
 from smb_sync.model import PaperlessUser
 from smb_sync.paperless import PaperlessError
-from smb_sync.service import run_cycle, run_cycle_locked
+from smb_sync.service import run_cycle, run_cycle_locked, run_daemon
 from smb_sync.system import CommandError
 
 CFG = Config(
@@ -87,3 +89,27 @@ def test_run_cycle_locked_uses_lock_file(tmp_path, capsys):
     system = FakeSystem()
     assert run_cycle_locked(CFG, api, system, lock_path=str(lock_path)) is True
     assert lock_path.exists()
+
+
+class StopLoop(Exception):
+    pass
+
+
+def test_daemon_survives_cycle_crash(monkeypatch, tmp_path):
+    class CrashingApi:
+        def fetch_desired_users(self, group_name):
+            # not a PaperlessError, so it escapes run_cycle and must be
+            # swallowed by the daemon loop itself
+            raise RuntimeError("boom")
+
+        def fetch_managed_workflows(self):
+            return []
+
+    def stop(_seconds):
+        raise StopLoop()
+
+    monkeypatch.setattr("smb_sync.service.time.sleep", stop)
+    with pytest.raises(StopLoop):
+        run_daemon(
+            CFG, CrashingApi(), FakeSystem(), lock_path=str(tmp_path / "lock")
+        )

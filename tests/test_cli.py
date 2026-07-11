@@ -1,4 +1,4 @@
-from smb_sync.cli import format_status, regen_password
+from smb_sync.cli import format_status, main, regen_password
 from smb_sync.config import Config
 from smb_sync.model import (
     ActualState,
@@ -62,6 +62,13 @@ def test_regen_password_unknown_user(capsys):
     assert "no managed samba account" in capsys.readouterr().err
 
 
+def test_regen_password_refuses_unmanaged_account(capsys):
+    system = FakeSystem(accounts=[SambaAccount("legacy", 1000, True)])
+    assert regen_password(CFG, system, "legacy") == 1
+    assert "no managed samba account" in capsys.readouterr().err
+    assert system.calls == []
+
+
 def test_regen_password_sets_and_prints(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
     assert regen_password(CFG, system, "alice") == 0
@@ -70,3 +77,27 @@ def test_regen_password_sets_and_prints(capsys):
     out = capsys.readouterr().out
     assert "SMB credentials for 'alice'" in out
     assert password in out
+
+
+def test_main_sync_maps_cycle_result_to_exit_code(monkeypatch):
+    monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
+    monkeypatch.setattr("smb_sync.cli.PaperlessClient", lambda url, token: object())
+    monkeypatch.setattr("smb_sync.cli.SystemAdapter", lambda root, gid: object())
+    monkeypatch.setattr(
+        "smb_sync.cli.run_cycle_locked", lambda cfg, api, system: True
+    )
+    assert main(["sync"]) == 0
+    monkeypatch.setattr(
+        "smb_sync.cli.run_cycle_locked", lambda cfg, api, system: False
+    )
+    assert main(["sync"]) == 1
+
+
+def test_main_regen_unknown_account(monkeypatch, capsys):
+    monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
+    monkeypatch.setattr("smb_sync.cli.PaperlessClient", lambda url, token: object())
+    monkeypatch.setattr(
+        "smb_sync.cli.SystemAdapter", lambda root, gid: FakeSystem(accounts=[])
+    )
+    assert main(["regen", "ghost"]) == 1
+    assert "no managed samba account" in capsys.readouterr().err

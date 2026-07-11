@@ -57,7 +57,12 @@ def run_cycle_locked(
         return run_cycle(cfg, api, system)
 
 
-def run_daemon(cfg: Config, api: PaperlessClient, system: SystemAdapter) -> None:
+def run_daemon(
+    cfg: Config,
+    api: PaperlessClient,
+    system: SystemAdapter,
+    lock_path: str = DEFAULT_LOCK_PATH,
+) -> None:
     log.info(
         "sync loop started (interval %ds, group '%s')",
         cfg.poll_interval,
@@ -65,7 +70,7 @@ def run_daemon(cfg: Config, api: PaperlessClient, system: SystemAdapter) -> None
     )
     while True:
         try:
-            run_cycle_locked(cfg, api, system)
+            run_cycle_locked(cfg, api, system, lock_path=lock_path)
         except Exception:
             log.exception("cycle crashed")
         time.sleep(cfg.poll_interval)

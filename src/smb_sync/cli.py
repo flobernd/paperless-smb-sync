@@ -71,7 +71,11 @@ def format_status(
 
 
 def regen_password(cfg: Config, system: SystemAdapter, username: str) -> int:
-    known = {account.username for account in system.list_samba_accounts()}
+    known = {
+        account.username
+        for account in system.list_samba_accounts()
+        if account.uid >= cfg.uid_base
+    }
     if username not in known:
         print(f"no managed samba account '{username}'", file=sys.stderr)
         return 1

@@ -54,11 +54,17 @@ class SystemAdapter:
 
     def list_inbox_folders(self) -> list[InboxFolder]:
         folders = []
-        for entry in os.scandir(self._inbox):
-            if entry.is_dir(follow_symlinks=False):
-                folders.append(
-                    InboxFolder(name=entry.name, uid=entry.stat().st_uid)
-                )
+        try:
+            with os.scandir(self._inbox) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        folders.append(
+                            InboxFolder(name=entry.name, uid=entry.stat().st_uid)
+                        )
+        except OSError as exc:
+            raise CommandError(
+                f"cannot list inbox folders in '{self._inbox}': {exc}"
+            ) from exc
         return folders
 
     # -- unix accounts -----------------------------------------------
@@ -109,6 +115,9 @@ class SystemAdapter:
         self._run(argv, input_text=f"{password}\n{password}\n")
 
     def delete_samba_account(self, username: str) -> None:
+        # idempotent so a retried deprovision after a partial failure succeeds
+        if all(a.username != username for a in self.list_samba_accounts()):
+            return
         self._run(["smbpasswd", "-x", username])
 
     def disable_samba_account(self, username: str) -> None:
@@ -121,8 +130,10 @@ class SystemAdapter:
         # tdbsam cannot rename; re-import the hash line under the new name
         # and delete the old entry last so a crash never loses the account
         output = self._run(["pdbedit", "-L", "-w", "-u", old])
-        line = output.strip().splitlines()[0]
-        parts = line.split(":")
+        lines = output.strip().splitlines()
+        if not lines:
+            raise CommandError(f"samba account '{old}' not found")
+        parts = lines[0].split(":")
         parts[0] = new
         fd, temp_path = tempfile.mkstemp(suffix=".smbpasswd")
         try:
@@ -137,14 +148,25 @@ class SystemAdapter:
 
     def create_inbox_folder(self, username: str, uid: int) -> None:
         path = self._inbox / username
-        path.mkdir(exist_ok=True)
-        os.chown(path, uid, self._gid)
-        path.chmod(0o2770)
+        try:
+            path.mkdir(exist_ok=True)
+            os.chown(path, uid, self._gid)
+            path.chmod(0o2770)
+        except OSError as exc:
+            raise CommandError(
+                f"cannot create inbox folder '{path}': {exc}"
+            ) from exc
 
     def delete_inbox_folder(self, username: str) -> None:
         path = self._inbox / username
-        if path.exists():
+        if not path.exists():
+            return
+        try:
             shutil.rmtree(path)
+        except OSError as exc:
+            raise CommandError(
+                f"cannot delete inbox folder '{path}': {exc}"
+            ) from exc
 
     def rename_inbox_folder(self, old: str, new: str) -> None:
         old_path = self._inbox / old
@@ -155,4 +177,9 @@ class SystemAdapter:
             raise CommandError(
                 f"cannot rename inbox folder '{old}': '{new}' already exists"
             )
-        old_path.rename(new_path)
+        try:
+            old_path.rename(new_path)
+        except OSError as exc:
+            raise CommandError(
+                f"cannot rename inbox folder '{old_path}' to '{new_path}': {exc}"
+            ) from exc

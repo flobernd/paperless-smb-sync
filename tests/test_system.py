@@ -171,3 +171,29 @@ def test_failed_command_raises(tmp_path):
     adapter = SystemAdapter(str(tmp_path), 10000, run=failing_run)
     with pytest.raises(CommandError):
         adapter.list_samba_accounts()
+
+
+def test_list_inbox_folders_missing_root_raises(tmp_path):
+    adapter, _ = make_adapter(tmp_path / "missing")
+    with pytest.raises(CommandError):
+        adapter.list_inbox_folders()
+
+
+def test_rename_samba_account_missing_raises(tmp_path):
+    adapter, _ = make_adapter(tmp_path)
+    with pytest.raises(CommandError, match="not found"):
+        adapter.rename_samba_account("ghost", "dave")
+
+
+def test_delete_samba_account_missing_is_noop(tmp_path):
+    adapter, run = make_adapter(tmp_path)
+    adapter.delete_samba_account("ghost")
+    assert all(call[0][0] != "smbpasswd" for call in run.calls)
+
+
+def test_delete_samba_account_present_runs_smbpasswd(tmp_path):
+    adapter, run = make_adapter(
+        tmp_path, {("pdbedit", "-L", "-w"): PDBEDIT_OUTPUT}
+    )
+    adapter.delete_samba_account("alice")
+    assert run.calls[-1] == (("smbpasswd", "-x", "alice"), None)

@@ -1,0 +1,22 @@
+[project]
+name = "paperless-smb-sync"
+version = "0.1.0"
+description = "Sync paperless-ngx users to a Samba inbox share"
+requires-python = ">=3.11"
+dependencies = ["requests>=2.31"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+smb-sync = "smb_sync.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

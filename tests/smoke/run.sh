@@ -35,11 +35,15 @@ USER_ID=$(api -X POST "$API/api/users/" \
 
 echo "== starting smb container =="
 SMOKE_TOKEN="$TOKEN" compose up -d --build smb
-sleep 30
+for i in $(seq 1 12); do
+    if compose exec -T smb pdbedit -L 2>/dev/null | grep -q "^carol:"; then break; fi
+    [ "$i" = 12 ] && fail "samba account did not appear within 60s"
+    sleep 5
+done
 
 echo "== asserting provisioning =="
-compose exec smb pdbedit -L | grep -q "^carol:" || fail "samba account missing"
-PERMS=$(compose exec smb stat -c '%a %u' /shares/inbox/carol)
+compose exec -T smb pdbedit -L | grep -q "^carol:" || fail "samba account missing"
+PERMS=$(compose exec -T smb stat -c '%a %u' /shares/inbox/carol)
 echo "$PERMS" | grep -q "^2770 " || fail "folder permissions wrong: $PERMS"
 api "$API/api/workflows/" | jq -r '.results[].name' | grep -qx '\[smb-sync\] carol' \
     || fail "workflow missing"
@@ -49,19 +53,23 @@ echo "== asserting smb login and write =="
 PASSWORD=$(compose logs smb | grep -A4 "SMB credentials for 'carol'" \
     | awk '/Password:/{print $NF}' | tail -1)
 [ -n "$PASSWORD" ] || fail "credentials block not found in logs"
-compose exec smb sh -c "echo smoke >/tmp/smoke.txt \
-    && smbclient //localhost/inbox -U carol%$PASSWORD -c 'put /tmp/smoke.txt smoke.txt'" \
+compose exec -T -e SMBPASS="$PASSWORD" smb sh -c \
+    'echo smoke >/tmp/smoke.txt && smbclient //localhost/inbox -U "carol%$SMBPASS" -c "put /tmp/smoke.txt smoke.txt"' \
     || fail "smb login or write failed"
-compose exec smb test -f /shares/inbox/carol/smoke.txt || fail "file not in user folder"
+compose exec -T smb test -f /shares/inbox/carol/smoke.txt || fail "file not in user folder"
 
 echo "== asserting regen =="
-compose exec smb smb-sync regen carol | grep -q "Password:" || fail "regen failed"
+compose exec -T smb smb-sync regen carol | grep -q "Password:" || fail "regen failed"
 
 echo "== asserting deprovisioning =="
 api -X PATCH "$API/api/users/$USER_ID/" -d '{"groups":[]}' >/dev/null
-sleep 20
-if compose exec smb pdbedit -L | grep -q "^carol:"; then fail "samba account not removed"; fi
-if compose exec smb test -e /shares/inbox/carol; then fail "folder not removed"; fi
+for i in $(seq 1 12); do
+    if ! compose exec -T smb pdbedit -L 2>/dev/null | grep -q "^carol:"; then break; fi
+    [ "$i" = 12 ] && fail "samba account not removed within 60s"
+    sleep 5
+done
+if compose exec -T smb pdbedit -L | grep -q "^carol:"; then fail "samba account not removed"; fi
+if compose exec -T smb test -e /shares/inbox/carol; then fail "folder not removed"; fi
 api "$API/api/workflows/" | jq -r '.results[].name' | grep -qx '\[smb-sync\] carol' \
     && fail "workflow not removed"
 

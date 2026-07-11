@@ -1,0 +1,34 @@
+services:
+  redis:
+    image: docker.io/library/redis:7
+
+  paperless:
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    depends_on:
+      - redis
+    environment:
+      PAPERLESS_REDIS: redis://redis:6379
+      PAPERLESS_SECRET_KEY: smoke-test-secret
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_ADMIN_PASSWORD: adminpass
+      PAPERLESS_CONSUMER_RECURSIVE: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - inbox:/usr/src/paperless/consume
+
+  smb:
+    build: ../..
+    depends_on:
+      - paperless
+    environment:
+      PAPERLESS_URL: http://paperless:8000
+      PAPERLESS_API_TOKEN: ${SMOKE_TOKEN:-unset}
+      POLL_INTERVAL: "5"
+    volumes:
+      - inbox:/shares/inbox
+      - samba-data:/var/lib/samba
+
+volumes:
+  inbox:
+  samba-data:

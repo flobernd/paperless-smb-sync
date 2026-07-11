@@ -1,0 +1,24 @@
+[global]
+    server role = standalone server
+    security = user
+    map to guest = never
+    server min protocol = SMB2
+    ntlm auth = ntlmv2-only
+    disable netbios = yes
+    smb ports = 445
+    load printers = no
+    printing = bsd
+    printcap name = /dev/null
+    logging = stdout
+    log level = 1
+
+[${SHARE_NAME}]
+    path = /shares/inbox/%U
+    valid users = @paperless
+    browseable = yes
+    read only = no
+    create mask = 0660
+    force create mode = 0660
+    directory mask = 2770
+    force directory mode = 2770
+    force group = paperless

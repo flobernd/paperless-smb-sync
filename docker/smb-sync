@@ -1,0 +1,3 @@
+#!/bin/sh
+export PYTHONPATH=/opt/smb-sync
+exec python3 -m smb_sync "$@"

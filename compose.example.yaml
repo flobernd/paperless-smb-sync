@@ -1,0 +1,21 @@
+services:
+  smb:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "445:445"
+    environment:
+      PAPERLESS_URL: http://webserver:8000
+      PAPERLESS_API_TOKEN: change-me
+      # SYNC_GROUP: smb
+      # POLL_INTERVAL: "30"
+      # UID_BASE: "20000"
+      # PAPERLESS_GID: "10000"
+      # SHARE_NAME: inbox
+      # SMB_HOST: paperless.example.lan
+    volumes:
+      - /srv/paperless/inbox:/shares/inbox
+      - samba-data:/var/lib/samba
+
+volumes:
+  samba-data:

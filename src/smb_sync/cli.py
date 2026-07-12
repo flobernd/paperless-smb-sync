@@ -77,13 +77,21 @@ def format_status(
 
 
 def regen_password(cfg: Config, system: SystemAdapter, username: str) -> int:
-    known = {
-        account.username
-        for account in system.list_samba_accounts()
-        if account.uid >= cfg.uid_base
-    }
-    if username not in known:
+    account = next(
+        (a for a in system.list_samba_accounts() if a.username == username),
+        None,
+    )
+    if account is None or account.uid < cfg.uid_base:
         print(f"no managed samba account '{username}'", file=sys.stderr)
+        return 1
+    if account.uid == UNMAPPED_UID:
+        # smbpasswd would fail obscurely: the unix account is gone, so run a
+        # sync cycle to repair it (or clean it up manually) before regenerating
+        print(
+            f"samba account '{username}' is stranded (no unix account); "
+            f"cannot regenerate password",
+            file=sys.stderr,
+        )
         return 1
     password = generate_password()
     system.set_samba_password(username, password, create=False)

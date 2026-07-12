@@ -90,6 +90,13 @@ def test_regen_password_refuses_unmanaged_account(capsys):
     assert system.calls == []
 
 
+def test_regen_password_refuses_stranded_account(capsys):
+    system = FakeSystem(accounts=[SambaAccount("orphan", UNMAPPED_UID, True)])
+    assert regen_password(CFG, system, "orphan") == 1
+    assert "stranded" in capsys.readouterr().err
+    assert system.calls == []
+
+
 def test_regen_password_sets_and_prints(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
     assert regen_password(CFG, system, "alice") == 0

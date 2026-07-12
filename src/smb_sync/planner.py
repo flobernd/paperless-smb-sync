@@ -44,7 +44,7 @@ def plan_cycle(
 
     accounts_by_name = {a.username: a for a in actual.accounts}
     accounts_by_uid = {a.uid: a for a in actual.accounts}
-    folder_names = {f.name for f in actual.folders}
+    folders_by_name = {f.name: f for f in actual.folders}
     workflows_by_username = {w.username: w for w in actual.workflows}
     desired_names = {u.username for u in valid}
 
@@ -78,7 +78,10 @@ def plan_cycle(
                     actions.append(EnableAccount(username=user.username))
                 continue
             actions.append(CreateAccount(user=user, uid=uid))
-            if user.username not in folder_names:
+            # an existing folder is adopted rather than recreated; correcting
+            # its owner uid also brings a pre-migration folder under management
+            folder = folders_by_name.get(user.username)
+            if folder is None or folder.uid != uid:
                 actions.append(CreateFolder(username=user.username, uid=uid))
             if user.username not in workflows_by_username:
                 actions.append(CreateWorkflow(user_id=user.id, username=user.username))
@@ -100,7 +103,8 @@ def plan_cycle(
             actions.append(DisableAccount(username=user.username))
         elif not account.enabled and user.is_active:
             actions.append(EnableAccount(username=user.username))
-        if user.username not in folder_names:
+        folder = folders_by_name.get(user.username)
+        if folder is None or folder.uid != uid:
             actions.append(CreateFolder(username=user.username, uid=uid))
         if user.username not in workflows_by_username:
             actions.append(CreateWorkflow(user_id=user.id, username=user.username))

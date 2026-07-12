@@ -83,6 +83,42 @@ def test_missing_folder_and_workflow_repaired():
     )
 
 
+def test_existing_folder_wrong_uid_is_adopted():
+    # steady state: the folder is present under the right name but carries a
+    # stale uid; correct its ownership so the new account can write to it
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 20005, True),),
+        folders=(InboxFolder("alice", 1000),),
+        workflows=(ManagedWorkflow(7, "alice"),),
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert plan.actions == (CreateFolder(username="alice", uid=20005),)
+
+
+def test_existing_folder_correct_uid_not_touched():
+    desired = [PaperlessUser(5, "alice", True)]
+    plan = plan_cycle(desired, provisioned_state(), UID_BASE)
+    assert not any(isinstance(a, CreateFolder) for a in plan.actions)
+
+
+def test_migration_adopts_prexisting_folder_wrong_uid():
+    # first sync after migration: no account yet, but the legacy inbox
+    # folder already exists under a non-managed uid and must be adopted
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = ActualState(
+        accounts=(),
+        folders=(InboxFolder("alice", 1000),),
+        workflows=(),
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert plan.actions == (
+        CreateAccount(user=desired[0], uid=20005),
+        CreateFolder(username="alice", uid=20005),
+        CreateWorkflow(user_id=5, username="alice"),
+    )
+
+
 def test_deprovision_removes_workflow_account_folder_in_order():
     plan = plan_cycle([], provisioned_state(), UID_BASE)
     assert plan.actions == (

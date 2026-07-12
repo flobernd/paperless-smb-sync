@@ -157,5 +157,8 @@ cannot be reused for Samba, so the first reconcile cycle generates a new
 password for every existing user and prints their credentials blocks to the
 log as if they were newly provisioned.
 
-Existing documents and inbox folders are not touched by the migration; only
-the account and password layer changes.
+Existing inbox folders are adopted on the first sync cycle: their ownership
+and permissions are corrected to `<uid>:paperless` mode `2770`, and from then
+on they are fully managed like any other inbox folder, including deletion when
+the user is offboarded. The documents already inside a folder are left in
+place; only the folder's owner and mode change.

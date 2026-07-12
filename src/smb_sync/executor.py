@@ -13,6 +13,7 @@ from .model import (
     DisableAccount,
     EnableAccount,
     RenameUser,
+    RepairUnixAccount,
 )
 from .paperless import PaperlessClient
 from .system import SystemAdapter
@@ -55,6 +56,13 @@ def _apply(
             print(
                 credentials_block(smb_host, share_name, user.username, password),
                 flush=True,
+            )
+        case RepairUnixAccount(username=username, uid=uid):
+            system.create_unix_user(username, uid)
+            log.warning(
+                "recreated missing unix account '%s' (uid %d) from passdb",
+                username,
+                uid,
             )
         case CreateFolder(username=username, uid=uid):
             system.create_inbox_folder(username, uid)

@@ -1,6 +1,7 @@
 import re
 
 from .model import (
+    UNMAPPED_UID,
     Action,
     ActualState,
     CreateAccount,
@@ -14,13 +15,11 @@ from .model import (
     PaperlessUser,
     Plan,
     RenameUser,
+    RepairUnixAccount,
 )
 
 # useradd-compatible names only; anything else is skipped with a warning
 _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
-
-# (uid_t)-1: pdbedit's marker for a passdb entry whose unix account is missing
-_UNMAPPED_UID = 4294967295
 
 
 def plan_cycle(
@@ -87,7 +86,12 @@ def plan_cycle(
                 actions.append(DisableAccount(username=user.username))
             continue
 
-        if account.uid != uid:
+        if account.uid == UNMAPPED_UID:
+            # passdb survived but its unix account did not (container
+            # recreation); rebuild it so smbd can map the NT hash again.
+            # create_unix_user is idempotent, so this is safe to re-emit.
+            actions.append(RepairUnixAccount(username=user.username, uid=uid))
+        elif account.uid != uid:
             warnings.append(
                 f"account '{user.username}' has uid {account.uid}, expected {uid}; "
                 f"left as-is"
@@ -108,7 +112,7 @@ def plan_cycle(
     # so deprovisioning it would make the rename unrecoverable
     for account in actual.accounts:
         if (
-            account.uid == _UNMAPPED_UID
+            account.uid == UNMAPPED_UID
             and account.username not in desired_names
             and account.username not in renamed_from
         ):
@@ -139,7 +143,7 @@ def plan_cycle(
         a.username
         for a in actual.accounts
         if a.uid >= uid_base
-        and a.uid != _UNMAPPED_UID
+        and a.uid != UNMAPPED_UID
         and a.uid not in invalid_uids
         and a.username not in desired_names
         and a.username not in renamed_from

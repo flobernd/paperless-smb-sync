@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 
+# (uid_t)-1: pdbedit reports this uid for a passdb entry whose unix account is
+# missing, e.g. after container recreation wipes the ephemeral /etc/passwd.
+UNMAPPED_UID = 4294967295
+
 
 @dataclass(frozen=True)
 class PaperlessUser:
@@ -86,6 +90,12 @@ class RenameUser:
     workflow_id: int | None
 
 
+@dataclass(frozen=True)
+class RepairUnixAccount:
+    username: str
+    uid: int
+
+
 Action = (
     CreateAccount
     | CreateFolder
@@ -96,6 +106,7 @@ Action = (
     | DisableAccount
     | EnableAccount
     | RenameUser
+    | RepairUnixAccount
 )
 
 

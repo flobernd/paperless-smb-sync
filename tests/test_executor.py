@@ -11,6 +11,7 @@ from smb_sync.model import (
     EnableAccount,
     PaperlessUser,
     RenameUser,
+    RepairUnixAccount,
 )
 from smb_sync.system import CommandError
 
@@ -115,6 +116,13 @@ def test_folder_workflow_and_state_actions():
     assert ("delete_inbox_folder", "alice") in system.calls
     assert ("create_workflow", 5, "alice") in api.calls
     assert ("delete_workflow", 7) in api.calls
+
+
+def test_repair_unix_account_recreates_unix_user_only():
+    failures, system, api = run([RepairUnixAccount(username="alice", uid=20005)])
+    assert failures == 0
+    assert system.calls == [("create_unix_user", "alice", 20005)]
+    assert api.calls == []
 
 
 def test_delete_account_removes_samba_before_unix():

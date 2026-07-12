@@ -1,4 +1,5 @@
 from smb_sync.model import (
+    UNMAPPED_UID,
     ActualState,
     CreateAccount,
     CreateFolder,
@@ -12,6 +13,7 @@ from smb_sync.model import (
     ManagedWorkflow,
     PaperlessUser,
     RenameUser,
+    RepairUnixAccount,
     SambaAccount,
 )
 from smb_sync.planner import plan_cycle
@@ -219,6 +221,34 @@ def test_stale_folder_with_desired_uid_frozen_with_warning():
     plan = plan_cycle(desired, actual, UID_BASE)
     assert DeleteFolder(username="alice") not in plan.actions
     assert any("alice" in w and "dave" in w for w in plan.warnings)
+
+
+def test_unmapped_uid_account_matching_user_is_repaired():
+    # container recreation wiped /etc/passwd but passdb.tdb survived; the
+    # unix account must be rebuilt so smbd can map the NT hash again
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("alice", UNMAPPED_UID, True),),
+        folders=(InboxFolder("alice", 20005),),
+        workflows=(ManagedWorkflow(7, "alice"),),
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert plan.actions == (RepairUnixAccount(username="alice", uid=20005),)
+    assert plan.warnings == ()
+
+
+def test_genuine_uid_mismatch_still_warns_not_repaired():
+    # a mapped-but-wrong uid is a real conflict, not a missing unix account;
+    # keep the conservative warn-and-leave behavior
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 19999, True),),
+        folders=(InboxFolder("alice", 19999),),
+        workflows=(ManagedWorkflow(7, "alice"),),
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert not any(isinstance(a, RepairUnixAccount) for a in plan.actions)
+    assert any("uid" in w.lower() for w in plan.warnings)
 
 
 def test_rename_with_reactivation_enables_new_name():

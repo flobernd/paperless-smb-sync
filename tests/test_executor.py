@@ -1,3 +1,5 @@
+import logging
+
 from smb_sync.credentials import PASSWORD_LENGTH, generate_password
 from smb_sync.executor import execute
 from smb_sync.model import (
@@ -194,6 +196,13 @@ def test_unexpected_exception_is_isolated_and_counted():
     )
     assert failures == 1
     assert ("delete_inbox_folder", "bob") in system.calls
+
+
+def test_unexpected_failure_logs_traceback(caplog):
+    system = FakeSystem(fail_on="disable_samba_account", fail_with=RuntimeError)
+    with caplog.at_level(logging.ERROR):
+        run([DisableAccount(username="alice")], system=system)
+    assert any(record.exc_info for record in caplog.records)
 
 
 def test_multiple_failures_accumulate():

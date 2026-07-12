@@ -35,7 +35,9 @@ def execute(
             _apply(action, system, api, smb_host=smb_host, share_name=share_name)
         except Exception as exc:
             failures += 1
-            log.error("action %r failed: %s", action, exc)
+            # exc_info so unexpected failures in a service that deletes
+            # accounts and folders stay diagnosable from the logs
+            log.error("action %r failed: %s", action, exc, exc_info=True)
     return failures
 
 

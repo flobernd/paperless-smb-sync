@@ -4,7 +4,7 @@ import sys
 
 from .config import Config, load_config
 from .credentials import credentials_block, generate_password
-from .model import ActualState, PaperlessUser
+from .model import UNMAPPED_UID, ActualState, PaperlessUser
 from .paperless import PaperlessClient
 from .service import run_cycle_locked, run_daemon
 from .system import SystemAdapter
@@ -53,11 +53,17 @@ def format_status(
         )
     for account in sorted(actual.accounts, key=lambda a: a.username):
         if account.uid >= uid_base and account.username not in desired_names:
+            # a sentinel-uid account matching no desired user is excluded from
+            # the planner's stale set, so it is never removed automatically
+            if account.uid == UNMAPPED_UID:
+                samba = "stranded, needs manual cleanup"
+            else:
+                samba = "pending removal"
             rows.append(
                 (
                     account.username,
                     str(account.uid),
-                    "pending removal",
+                    samba,
                     "yes" if account.username in folders else "no",
                     "yes" if account.username in workflows else "no",
                 )

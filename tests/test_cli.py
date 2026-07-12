@@ -1,6 +1,7 @@
 from smb_sync.cli import format_status, main, regen_password
 from smb_sync.config import Config
 from smb_sync.model import (
+    UNMAPPED_UID,
     ActualState,
     InboxFolder,
     ManagedWorkflow,
@@ -54,6 +55,26 @@ def test_format_status_table():
     assert "missing" in bob_line
     gone_line = next(line for line in lines if line.startswith("gone"))
     assert "pending removal" in gone_line
+
+
+def test_format_status_labels_stranded_account():
+    # a sentinel-uid account that matches no desired user is never removed by
+    # the planner, so it must not read as "pending removal"
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = ActualState(
+        accounts=(
+            SambaAccount("alice", 20005, True),
+            SambaAccount("orphan", UNMAPPED_UID, True),
+        ),
+        folders=(),
+        workflows=(),
+    )
+    output = format_status(desired, actual, 20000)
+    orphan_line = next(
+        line for line in output.splitlines() if line.startswith("orphan")
+    )
+    assert "stranded" in orphan_line
+    assert "pending removal" not in orphan_line
 
 
 def test_regen_password_unknown_user(capsys):

@@ -157,6 +157,13 @@ cannot be reused for Samba, so the first reconcile cycle generates a new
 password for every existing user and prints their credentials blocks to the
 log as if they were newly provisioned.
 
+The unix accounts backing those Samba logins live in the container's
+ephemeral filesystem and are lost when the container is recreated. The daemon
+rebuilds each missing unix account from its surviving `passdb.tdb` entry on
+the next sync cycle, restoring logins with the old passwords. Because of this,
+`passdb.tdb` (the `/var/lib/samba` volume) is the only state you need to
+preserve.
+
 Existing inbox folders are adopted on the first sync cycle: their ownership
 and permissions are corrected to `<uid>:paperless` mode `2770`, and from then
 on they are fully managed like any other inbox folder, including deletion when

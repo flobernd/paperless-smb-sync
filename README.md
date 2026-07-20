@@ -1,4 +1,10 @@
-# paperless-smb-sync
+<!-- markdownlint-disable-file MD033 MD041 -->
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo-light.png" alt="paperless-smb-sync" width="360">
+  </picture>
+</div>
 
 `paperless-smb-sync` is a single container that serves per-user SMB inbox
 shares for a [multi-user paperless-ngx setup](https://blog.flobernd.de/2026/02/paperless-ngx-document-management/)

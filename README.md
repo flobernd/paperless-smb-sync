@@ -43,15 +43,21 @@ modified or deleted.
 
 ### Passwords are generated and shown once
 
-Paperless passwords cannot be reused for Samba: paperless stores a Django
-PBKDF2 hash and Samba needs an NT hash, and one cannot be derived from the
-other. Instead, the daemon generates a random 20-character password when it
-creates a Samba account and prints it to the container log exactly once, in
-a block with the server, share path, username, and password ready to copy
-into a scanner profile. Nothing else keeps a copy: only Samba's own
-`passdb.tdb` stores the (hashed) credential, and it is not retrievable in
-plaintext afterward. If a password is lost, generate a new one with `smb-sync
-regen <username>` (see Admin commands below).
+The daemon generates a random 20-character password when it creates a Samba
+account and prints it to the container log exactly once, in a block with the
+server, share path, username, and password ready to copy into a scanner
+profile. Nothing else keeps a copy: only Samba's own `passdb.tdb` stores the
+(hashed) credential, and it is not retrievable in plaintext afterward. If a
+password is lost, generate a new one with `smb-sync regen <username>` (see
+Admin commands below).
+
+### The only state is passdb.tdb
+
+The `/var/lib/samba` volume holds `passdb.tdb`, Samba's own credential store,
+and must persist across restarts; without it every user gets a new password
+after a container recreation. The unix accounts backing those logins live in
+the container's ephemeral filesystem, and the daemon rebuilds each missing one
+from its surviving `passdb.tdb` entry on the next sync cycle.
 
 ### Deactivation suspends, it does not delete
 
@@ -142,36 +148,6 @@ smb-sync <command>`:
   prints the one-time credentials block again. Fails if the account is not
   one the daemon manages.
 
-## Migrating from the servercontainers/samba setup
+## License
 
-The [referenced blog post](https://blog.flobernd.de/2026/02/paperless-ngx-document-management/)
-describes a setup using the `servercontainers/samba` image with manually
-maintained accounts. Moving to this container is a one-time procedure:
-
-1. Create the `smb` group in paperless and add the existing scanner users to
-   it.
-2. Create an admin API token as described in Setup above.
-3. In your compose file, replace the `servercontainers/samba` service with
-   this one, keep the existing bind mount to the shared inbox directory, and
-   add the named volume for `/var/lib/samba` shown in `compose.example.yaml`.
-4. Start the container and update each scanner profile once with the new
-   credentials from the log.
-
-The `/var/lib/samba` volume holds `passdb.tdb`, Samba's own credential
-store, and must persist across restarts. Existing paperless passwords
-cannot be reused for Samba, so the first reconcile cycle generates a new
-password for every existing user and prints their credentials blocks to the
-log as if they were newly provisioned.
-
-The unix accounts backing those Samba logins live in the container's
-ephemeral filesystem and are lost when the container is recreated. The daemon
-rebuilds each missing unix account from its surviving `passdb.tdb` entry on
-the next sync cycle, restoring logins with the old passwords. Because of this,
-`passdb.tdb` (the `/var/lib/samba` volume) is the only state you need to
-preserve.
-
-Existing inbox folders are adopted on the first sync cycle: their ownership
-and permissions are corrected to `<uid>:paperless` mode `2770`, and from then
-on they are fully managed like any other inbox folder, including deletion when
-the user is offboarded. The documents already inside a folder are left in
-place; only the folder's owner and mode change.
+Released under the MIT license. See [`LICENSE`](LICENSE) for the full text.

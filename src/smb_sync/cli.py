@@ -112,8 +112,7 @@ def regen_password(
         return 1
     password = generate_password()
     system.set_samba_password(username, password, create=False)
-    block = credentials_block(cfg.smb_host, cfg.share_name, username, password)
-    print(block)
+    print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
     if cfg.mail_enabled and api is not None:
         try:
             email = _email_of(api, cfg, username)
@@ -123,7 +122,16 @@ def regen_password(
             log.error("could not look up the address for '%s': %s", username, exc)
         else:
             deliver_credentials(
-                partial(send_credentials, cfg.mail), username, email, block
+                partial(send_credentials, cfg.mail),
+                username,
+                email,
+                credentials_block(
+                    cfg.smb_host,
+                    cfg.share_name,
+                    username,
+                    password,
+                    regen_hint=False,
+                ),
             )
     return 0
 

@@ -65,10 +65,23 @@ def _apply(
             password = generate_password()
             system.set_samba_password(user.username, password, create=True)
             log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
-            block = credentials_block(smb_host, share_name, user.username, password)
-            print(block, flush=True)
+            print(
+                credentials_block(smb_host, share_name, user.username, password),
+                flush=True,
+            )
             if deliver is not None:
-                deliver_credentials(deliver, user.username, user.email, block)
+                deliver_credentials(
+                    deliver,
+                    user.username,
+                    user.email,
+                    credentials_block(
+                        smb_host,
+                        share_name,
+                        user.username,
+                        password,
+                        regen_hint=False,
+                    ),
+                )
         case RepairUnixAccount(username=username, uid=uid):
             system.create_unix_user(username, uid)
             log.warning(

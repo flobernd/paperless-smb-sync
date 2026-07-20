@@ -272,3 +272,13 @@ def test_a_failed_mail_does_not_fail_provisioning(caplog):
         "set_samba_password",
     ]
     assert "smtp down" in caplog.text
+
+
+def test_the_emailed_block_drops_the_admin_only_regen_hint(capsys):
+    deliver = FakeDelivery()
+    user = PaperlessUser(5, "alice", True, "alice@example.com")
+    run([CreateAccount(user=user, uid=20005)], deliver=deliver)
+    _, _, block = deliver.sent[0]
+    assert "smb-sync regen" not in block
+    # the log keeps it, since that is where an admin can act on it
+    assert "smb-sync regen alice" in capsys.readouterr().out

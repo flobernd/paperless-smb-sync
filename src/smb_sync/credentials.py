@@ -11,19 +11,26 @@ def generate_password() -> str:
 
 
 def credentials_block(
-    host: str, share_name: str, username: str, password: str
+    host: str,
+    share_name: str,
+    username: str,
+    password: str,
+    *,
+    regen_hint: bool = True,
 ) -> str:
     server = host or "<server>"
-    return "\n".join(
-        [
-            "=" * 60,
-            f"SMB credentials for '{username}'",
-            f"  Server:   {server}",
-            f"  Share:    \\\\{server}\\{share_name}",
-            f"  Username: {username}",
-            f"  Password: {password}",
-            "This password is shown only once.",
-            f"Regenerate with: smb-sync regen {username}",
-            "=" * 60,
-        ]
-    )
+    lines = [
+        "=" * 60,
+        f"SMB credentials for '{username}'",
+        f"  Server:   {server}",
+        f"  Share:    \\\\{server}\\{share_name}",
+        f"  Username: {username}",
+        f"  Password: {password}",
+        "This password is shown only once.",
+    ]
+    # `smb-sync regen` runs inside the container, so it is only actionable for
+    # whoever reads the log, not for a user who receives the block by mail
+    if regen_hint:
+        lines.append(f"Regenerate with: smb-sync regen {username}")
+    lines.append("=" * 60)
+    return "\n".join(lines)

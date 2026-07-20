@@ -224,3 +224,16 @@ def test_regen_survives_an_api_failure_during_the_email_lookup(monkeypatch, capl
         # must not surface as a crash
         assert regen_password(MAIL_CFG, system, "alice", BrokenApi()) == 0
     assert "api down" in caplog.text
+
+
+def test_regen_emails_a_block_without_the_admin_only_hint(monkeypatch, capsys):
+    sent = []
+    monkeypatch.setattr(
+        "smb_sync.cli.send_credentials",
+        lambda mail, to, username, block: sent.append(block),
+    )
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    api = FakeUserApi([PaperlessUser(5, "alice", True, "alice@example.com")])
+    assert regen_password(MAIL_CFG, system, "alice", api) == 0
+    assert "smb-sync regen" not in sent[0]
+    assert "smb-sync regen alice" in capsys.readouterr().out

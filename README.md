@@ -140,6 +140,27 @@ the supported way to add settings to the share itself. Do not override its
 `path` or `valid users` there: those are what route each user into their own
 inbox folder, and changing them breaks provisioning for every user.
 
+### Making the inbox write-once
+
+Anyone holding a user's SMB credentials can overwrite or delete that user's
+scans while they wait to be consumed. Samba's `worm` module closes that off by
+turning a file read-only once it is older than a grace period:
+
+```yaml
+[inbox]
+    vfs objects = worm
+    worm:grace_period = 300
+```
+
+New files can still be created, so scanning keeps working, and paperless
+reaches the folder through the filesystem rather than over SMB, so consumption
+and cleanup are unaffected. Only access arriving over SMB is restricted.
+
+Keep the grace period long enough for a scan job to finish. Scanners that
+write to a temporary name and rename it, or that reopen a file to append
+pages, fail against a file that has already frozen; five minutes is a safe
+starting point, `0` is not.
+
 ## Setup
 
 1. In paperless, create the `smb` group (or whatever name you plan to use

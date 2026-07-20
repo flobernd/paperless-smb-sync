@@ -65,6 +65,10 @@ in the log. Enabling the setting without `PAPERLESS_EMAIL_HOST` warns once at
 startup and nothing is ever sent, and a user with no email address in
 paperless warns every time credentials are generated for them.
 
+Set `SMB_HOST` as well once mail is enabled. Without it the block falls back to
+a literal `<server>` placeholder, which an administrator reading the log can
+resolve but the recipient of the mail cannot.
+
 ### The only state is passdb.tdb
 
 The `/var/lib/samba` volume holds `passdb.tdb`, Samba's own credential store,
@@ -203,7 +207,9 @@ starting point, `0` is not.
 5. Add users to the `smb` group in paperless.
 6. Read each user's one-time credentials block with `docker logs
    <container>` and enter the printed server, share path, username, and
-   password into the scanner's SMB profile.
+   password into the scanner's SMB profile. With `EMAIL_CREDENTIALS` enabled
+   the same block also reaches the user by mail, so this step can be theirs
+   rather than yours.
 
 Each user is provisioned within one `POLL_INTERVAL` of joining the group;
 the credentials block appears in the container log at that moment and is
@@ -219,8 +225,9 @@ smb-sync <command>`:
 - `sync` - runs one reconcile cycle immediately, instead of waiting for the
   next `POLL_INTERVAL`.
 - `regen <username>` - sets a new random password for a managed account and
-  prints the one-time credentials block again. Fails if the account is not
-  one the daemon manages.
+  prints the one-time credentials block again, emailing it as well when
+  `EMAIL_CREDENTIALS` is enabled. Fails if the account is not one the daemon
+  manages.
 
 ## License
 

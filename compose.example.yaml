@@ -17,6 +17,7 @@ services:
       - /srv/paperless/inbox:/shares/inbox
       # Holds passdb.tdb; without it every user gets a new password on recreate.
       - samba-data:/var/lib/samba
+      # - ./smb-custom.conf:/etc/samba/conf.d/custom.conf:ro
 
 volumes:
   samba-data:

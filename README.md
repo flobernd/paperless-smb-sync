@@ -115,6 +115,31 @@ The admin API token needs permission to read users, groups, and workflows,
 and to create, update, and delete workflows; an administrator account's
 token is the simplest choice.
 
+## Custom Samba configuration
+
+The container generates `/etc/samba/smb.conf` on every start, so edits to it
+do not survive a restart. To add your own Samba settings, mount one or more
+`*.conf` files into `/etc/samba/conf.d/`:
+
+```yaml
+    volumes:
+      - ./smb-custom.conf:/etc/samba/conf.d/custom.conf:ro
+```
+
+Drop-ins are appended to the generated file in filename order, after the
+managed share. A `[global]` header in a drop-in therefore re-opens the global
+section and its settings override the defaults, and any other section header
+defines an additional share. The container runs `testparm` over the merged
+file at startup and refuses to start if the result contains an unknown
+parameter, so a misspelled setting shows up immediately in the log instead of
+being ignored for the life of the container.
+
+A drop-in that repeats the managed share's section name (`inbox`, or whatever
+`SHARE_NAME` is set to) merges into it rather than replacing it, so that is
+the supported way to add settings to the share itself. Do not override its
+`path` or `valid users` there: those are what route each user into their own
+inbox folder, and changing them breaks provisioning for every user.
+
 ## Setup
 
 1. In paperless, create the `smb` group (or whatever name you plan to use

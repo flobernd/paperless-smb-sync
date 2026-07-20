@@ -15,6 +15,7 @@ services:
       # SMB_HOST: paperless.example.lan
     volumes:
       - /srv/paperless/inbox:/shares/inbox
+      # Holds passdb.tdb; without it every user gets a new password on recreate.
       - samba-data:/var/lib/samba
 
 volumes:

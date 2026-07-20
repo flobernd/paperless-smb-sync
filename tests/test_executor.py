@@ -15,6 +15,7 @@ from smb_sync.model import (
     RenameUser,
     RepairUnixAccount,
 )
+from smb_sync.mail import MailError
 from smb_sync.system import CommandError
 
 
@@ -74,10 +75,28 @@ class FakeApi:
         self.calls.append(("rename_workflow", workflow_id, user_id, new_username))
 
 
-def run(actions, system=None, api=None):
+class FakeDelivery:
+    def __init__(self, fail=False):
+        self.sent = []
+        self.fail = fail
+
+    def __call__(self, to, username, block):
+        if self.fail:
+            raise MailError("smtp down")
+        self.sent.append((to, username, block))
+
+
+def run(actions, system=None, api=None, deliver=None):
     system = system or FakeSystem()
     api = api or FakeApi()
-    failures = execute(actions, system, api, smb_host="nas.lan", share_name="inbox")
+    failures = execute(
+        actions,
+        system,
+        api,
+        smb_host="nas.lan",
+        share_name="inbox",
+        deliver=deliver,
+    )
     return failures, system, api
 
 
@@ -217,3 +236,39 @@ def test_multiple_failures_accumulate():
     )
     assert failures == 2
     assert ("delete_inbox_folder", "carol") in system.calls
+
+
+def test_emails_the_credentials_when_delivery_is_configured(capsys):
+    deliver = FakeDelivery()
+    user = PaperlessUser(5, "alice", True, "alice@example.com")
+    failures, system, _ = run([CreateAccount(user=user, uid=20005)], deliver=deliver)
+    assert failures == 0
+    to, username, block = deliver.sent[0]
+    assert (to, username) == ("alice@example.com", "alice")
+    password = system.calls[1][2]
+    assert password in block
+    # the printed block stays as the fallback for a mail that never arrives
+    assert password in capsys.readouterr().out
+
+
+def test_warns_when_the_user_has_no_email_address(caplog):
+    deliver = FakeDelivery()
+    user = PaperlessUser(5, "alice", True, "")
+    with caplog.at_level(logging.WARNING):
+        failures, _, _ = run([CreateAccount(user=user, uid=20005)], deliver=deliver)
+    assert failures == 0
+    assert deliver.sent == []
+    assert "no email address" in caplog.text
+
+
+def test_a_failed_mail_does_not_fail_provisioning(caplog):
+    deliver = FakeDelivery(fail=True)
+    user = PaperlessUser(5, "alice", True, "alice@example.com")
+    with caplog.at_level(logging.ERROR):
+        failures, system, _ = run([CreateAccount(user=user, uid=20005)], deliver=deliver)
+    assert failures == 0
+    assert [call[0] for call in system.calls] == [
+        "create_unix_user",
+        "set_samba_password",
+    ]
+    assert "smtp down" in caplog.text

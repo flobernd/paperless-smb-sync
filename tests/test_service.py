@@ -1,10 +1,22 @@
+from dataclasses import replace
+
 import pytest
 
-from smb_sync.config import Config
+from smb_sync.config import Config, MailConfig
 from smb_sync.model import PaperlessUser
 from smb_sync.paperless import PaperlessError
 from smb_sync.service import run_cycle, run_cycle_locked, run_daemon
 from smb_sync.system import CommandError
+
+NO_MAIL = MailConfig(
+    host="",
+    port=25,
+    username="",
+    password="",
+    use_tls=False,
+    use_ssl=False,
+    sender="smb-sync@localhost",
+)
 
 CFG = Config(
     paperless_url="http://x",
@@ -16,6 +28,8 @@ CFG = Config(
     share_name="inbox",
     smb_host="",
     inbox_path="/shares/inbox",
+    email_credentials=False,
+    mail=NO_MAIL,
 )
 
 
@@ -113,3 +127,33 @@ def test_daemon_survives_cycle_crash(monkeypatch, tmp_path):
         run_daemon(
             CFG, CrashingApi(), FakeSystem(), lock_path=str(tmp_path / "lock")
         )
+
+
+MAIL_CFG = replace(
+    CFG,
+    email_credentials=True,
+    mail=replace(NO_MAIL, host="smtp.lan", sender="scans@example.com"),
+)
+
+
+def test_credentials_are_emailed_when_mail_is_enabled(monkeypatch, capsys):
+    sent = []
+    monkeypatch.setattr(
+        "smb_sync.service.send_credentials",
+        lambda mail, to, username, block: sent.append((mail.host, to, username, block)),
+    )
+    api = FakeApi(users=[PaperlessUser(5, "alice", True, "alice@example.com")])
+    assert run_cycle(MAIL_CFG, api, FakeSystem()) is True
+    host, to, username, block = sent[0]
+    assert (host, to, username) == ("smtp.lan", "alice@example.com", "alice")
+    assert "SMB credentials for 'alice'" in block
+
+
+def test_nothing_is_emailed_when_mail_is_disabled(monkeypatch, capsys):
+    sent = []
+    monkeypatch.setattr(
+        "smb_sync.service.send_credentials", lambda *args: sent.append(args)
+    )
+    api = FakeApi(users=[PaperlessUser(5, "alice", True, "alice@example.com")])
+    assert run_cycle(CFG, api, FakeSystem()) is True
+    assert sent == []

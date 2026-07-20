@@ -13,6 +13,14 @@ services:
       # PAPERLESS_GID: "10000"
       # SHARE_NAME: inbox
       # SMB_HOST: paperless.example.lan
+      # Mail the credentials to each user; reuses the paperless mail settings.
+      # EMAIL_CREDENTIALS: "true"
+      # PAPERLESS_EMAIL_HOST: smtp.example.com
+      # PAPERLESS_EMAIL_PORT: "587"
+      # PAPERLESS_EMAIL_HOST_USER: paperless@example.com
+      # PAPERLESS_EMAIL_HOST_PASSWORD: change-me
+      # PAPERLESS_EMAIL_USE_TLS: "true"
+      # PAPERLESS_EMAIL_FROM: paperless@example.com
     volumes:
       - /srv/paperless/inbox:/shares/inbox
       # Holds passdb.tdb; without it every user gets a new password on recreate.

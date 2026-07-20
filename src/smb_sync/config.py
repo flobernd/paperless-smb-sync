@@ -4,6 +4,17 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class MailConfig:
+    host: str
+    port: int
+    username: str
+    password: str
+    use_tls: bool
+    use_ssl: bool
+    sender: str
+
+
+@dataclass(frozen=True)
 class Config:
     paperless_url: str
     paperless_token: str
@@ -14,6 +25,12 @@ class Config:
     share_name: str
     smb_host: str
     inbox_path: str
+    email_credentials: bool
+    mail: MailConfig
+
+    @property
+    def mail_enabled(self) -> bool:
+        return self.email_credentials and bool(self.mail.host)
 
 
 def _read_token(env: Mapping[str, str]) -> str:
@@ -29,6 +46,34 @@ def _read_token(env: Mapping[str, str]) -> str:
     if token:
         return token
     raise ValueError("PAPERLESS_API_TOKEN or PAPERLESS_API_TOKEN_FILE is required")
+
+
+def _read_bool(env: Mapping[str, str], name: str) -> bool:
+    return env.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _read_mail(env: Mapping[str, str]) -> MailConfig:
+    # deliberately the paperless-ngx variable names, so an existing mail setup
+    # can be shared with this container instead of configured twice
+    login = env.get("PAPERLESS_EMAIL_HOST_USER", "")
+    return MailConfig(
+        host=env.get("PAPERLESS_EMAIL_HOST", ""),
+        port=int(env.get("PAPERLESS_EMAIL_PORT", "25")),
+        username=login,
+        password=env.get("PAPERLESS_EMAIL_HOST_PASSWORD", ""),
+        use_tls=_read_bool(env, "PAPERLESS_EMAIL_USE_TLS"),
+        use_ssl=_read_bool(env, "PAPERLESS_EMAIL_USE_SSL"),
+        sender=env.get("PAPERLESS_EMAIL_FROM", "") or login or "smb-sync@localhost",
+    )
+
+
+def config_warnings(cfg: Config) -> tuple[str, ...]:
+    if cfg.email_credentials and not cfg.mail.host:
+        return (
+            "EMAIL_CREDENTIALS is enabled but PAPERLESS_EMAIL_HOST is not set; "
+            "credentials will only be printed to the log",
+        )
+    return ()
 
 
 def load_config(env: Mapping[str, str] | None = None) -> Config:
@@ -47,4 +92,6 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         share_name=env.get("SHARE_NAME", "inbox"),
         smb_host=env.get("SMB_HOST", ""),
         inbox_path=env.get("INBOX_PATH", "/shares/inbox"),
+        email_credentials=_read_bool(env, "EMAIL_CREDENTIALS"),
+        mail=_read_mail(env),
     )

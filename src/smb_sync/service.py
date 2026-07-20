@@ -1,9 +1,11 @@
 import fcntl
 import logging
 import time
+from functools import partial
 
 from .config import Config
 from .executor import execute
+from .mail import send_credentials
 from .model import ActualState
 from .paperless import PaperlessClient, PaperlessError
 from .planner import plan_cycle
@@ -41,6 +43,7 @@ def run_cycle(cfg: Config, api: PaperlessClient, system: SystemAdapter) -> bool:
         api,
         smb_host=cfg.smb_host,
         share_name=cfg.share_name,
+        deliver=partial(send_credentials, cfg.mail) if cfg.mail_enabled else None,
     )
     return failures == 0
 

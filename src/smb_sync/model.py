@@ -10,6 +10,7 @@ class PaperlessUser:
     id: int
     username: str
     is_active: bool
+    email: str = ""
 
 
 @dataclass(frozen=True)

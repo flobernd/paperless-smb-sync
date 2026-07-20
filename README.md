@@ -51,6 +51,20 @@ profile. Nothing else keeps a copy: only Samba's own `passdb.tdb` stores the
 password is lost, generate a new one with `smb-sync regen <username>` (see
 Admin commands below).
 
+### Credentials can be emailed to the user
+
+Set `EMAIL_CREDENTIALS=true` and the daemon also sends the block to the user's
+paperless email address, both when the account is provisioned and when
+`smb-sync regen` sets a new password. Onboarding then does not depend on an
+administrator reading the log and relaying a password by hand.
+
+Delivery is best effort and never blocks provisioning: the block is always
+printed as well, and a mail server that rejects or drops the message is logged
+as an error rather than retried forever. Two situations are worth watching for
+in the log. Enabling the setting without `PAPERLESS_EMAIL_HOST` warns once at
+startup and nothing is ever sent, and a user with no email address in
+paperless warns every time credentials are generated for them.
+
 ### The only state is passdb.tdb
 
 The `/var/lib/samba` volume holds `passdb.tdb`, Samba's own credential store,
@@ -109,11 +123,25 @@ All configuration is via environment variables, read in
 | `PAPERLESS_GID` | `10000` | GID of the shared `paperless` group that owns every inbox folder. |
 | `SHARE_NAME` | `inbox` | Name of the exported SMB share. |
 | `SMB_HOST` | empty | Hostname or IP shown in the printed credentials block (provisioning log and `smb-sync regen` output); display only, it does not affect how the share is served. |
+| `EMAIL_CREDENTIALS` | `false` | Email each credentials block to the user in addition to printing it. Needs the SMTP settings below. |
 | `INBOX_PATH` | `/shares/inbox` | Path inside the container where the sync daemon creates and manages per-user inbox folders. The share definition and the container's `mkdir` at startup both use the fixed path `/shares/inbox`, so this normally only needs to match the volume mount target and does not need to be changed. |
 
 The admin API token needs permission to read users, groups, and workflows,
 and to create, update, and delete workflows; an administrator account's
 token is the simplest choice.
+
+### SMTP settings
+
+`EMAIL_CREDENTIALS` reads its mail server from the same variables paperless-ngx
+itself uses, so a deployment that already sends mail can hand this container
+the same values, or the same `env_file`, instead of configuring a second time:
+`PAPERLESS_EMAIL_HOST`, `PAPERLESS_EMAIL_PORT` (default `25`),
+`PAPERLESS_EMAIL_HOST_USER`, `PAPERLESS_EMAIL_HOST_PASSWORD`,
+`PAPERLESS_EMAIL_USE_TLS`, `PAPERLESS_EMAIL_USE_SSL`, and
+`PAPERLESS_EMAIL_FROM` (defaults to `PAPERLESS_EMAIL_HOST_USER`).
+
+Only `PAPERLESS_EMAIL_HOST` is required; it has no default here, and leaving it
+unset is what disables delivery.
 
 ## Custom Samba configuration
 

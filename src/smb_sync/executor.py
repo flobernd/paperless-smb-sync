@@ -15,6 +15,7 @@ from .model import (
     RenameUser,
     RepairUnixAccount,
 )
+from .mail import CredentialDelivery, deliver_credentials
 from .paperless import PaperlessClient
 from .system import SystemAdapter
 
@@ -28,11 +29,19 @@ def execute(
     *,
     smb_host: str,
     share_name: str,
+    deliver: CredentialDelivery | None = None,
 ) -> int:
     failures = 0
     for action in actions:
         try:
-            _apply(action, system, api, smb_host=smb_host, share_name=share_name)
+            _apply(
+                action,
+                system,
+                api,
+                smb_host=smb_host,
+                share_name=share_name,
+                deliver=deliver,
+            )
         except Exception as exc:
             failures += 1
             # exc_info so unexpected failures in a service that deletes
@@ -48,6 +57,7 @@ def _apply(
     *,
     smb_host: str,
     share_name: str,
+    deliver: CredentialDelivery | None = None,
 ) -> None:
     match action:
         case CreateAccount(user=user, uid=uid):
@@ -55,10 +65,10 @@ def _apply(
             password = generate_password()
             system.set_samba_password(user.username, password, create=True)
             log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
-            print(
-                credentials_block(smb_host, share_name, user.username, password),
-                flush=True,
-            )
+            block = credentials_block(smb_host, share_name, user.username, password)
+            print(block, flush=True)
+            if deliver is not None:
+                deliver_credentials(deliver, user.username, user.email, block)
         case RepairUnixAccount(username=username, uid=uid):
             system.create_unix_user(username, uid)
             log.warning(

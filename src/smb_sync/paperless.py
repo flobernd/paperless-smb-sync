@@ -75,7 +75,12 @@ class PaperlessClient:
             raise PaperlessError(f"paperless group '{group_name}' does not exist")
         users = self._get_all("/api/users/")
         return [
-            PaperlessUser(id=u["id"], username=u["username"], is_active=u["is_active"])
+            PaperlessUser(
+                id=u["id"],
+                username=u["username"],
+                is_active=u["is_active"],
+                email=u.get("email", ""),
+            )
             for u in users
             if group["id"] in u["groups"]
         ]

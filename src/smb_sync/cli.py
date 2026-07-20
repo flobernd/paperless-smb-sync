@@ -1,13 +1,17 @@
 import argparse
 import logging
 import sys
+from functools import partial
 
-from .config import Config, load_config
+from .config import Config, config_warnings, load_config
 from .credentials import credentials_block, generate_password
+from .mail import deliver_credentials, send_credentials
 from .model import UNMAPPED_UID, ActualState, PaperlessUser
-from .paperless import PaperlessClient
+from .paperless import PaperlessClient, PaperlessError
 from .service import run_cycle_locked, run_daemon
 from .system import SystemAdapter
+
+log = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,7 +80,20 @@ def format_status(
     )
 
 
-def regen_password(cfg: Config, system: SystemAdapter, username: str) -> int:
+def _email_of(api: PaperlessClient, cfg: Config, username: str) -> str:
+    user = next(
+        (u for u in api.fetch_desired_users(cfg.sync_group) if u.username == username),
+        None,
+    )
+    return user.email if user is not None else ""
+
+
+def regen_password(
+    cfg: Config,
+    system: SystemAdapter,
+    username: str,
+    api: PaperlessClient | None = None,
+) -> int:
     account = next(
         (a for a in system.list_samba_accounts() if a.username == username),
         None,
@@ -95,7 +112,19 @@ def regen_password(cfg: Config, system: SystemAdapter, username: str) -> int:
         return 1
     password = generate_password()
     system.set_samba_password(username, password, create=False)
-    print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
+    block = credentials_block(cfg.smb_host, cfg.share_name, username, password)
+    print(block)
+    if cfg.mail_enabled and api is not None:
+        try:
+            email = _email_of(api, cfg, username)
+        except PaperlessError as exc:
+            # the password is already changed and printed; an unreachable API
+            # costs the mail, not the command
+            log.error("could not look up the address for '%s': %s", username, exc)
+        else:
+            deliver_credentials(
+                partial(send_credentials, cfg.mail), username, email, block
+            )
     return 0
 
 
@@ -107,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = build_parser().parse_args(argv)
     cfg = load_config()
+    for warning in config_warnings(cfg):
+        log.warning("%s", warning)
     api = PaperlessClient(cfg.paperless_url, cfg.paperless_token)
     system = SystemAdapter(cfg.inbox_path, cfg.paperless_gid)
 
@@ -125,5 +156,5 @@ def main(argv: list[str] | None = None) -> int:
         print(format_status(desired, actual, cfg.uid_base))
         return 0
     if args.command == "regen":
-        return regen_password(cfg, system, args.username)
+        return regen_password(cfg, system, args.username, api)
     return 2

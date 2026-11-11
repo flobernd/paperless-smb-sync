@@ -123,6 +123,16 @@ def test_set_samba_password_create_and_update(tmp_path):
     ]
 
 
+def test_disable_and_enable_send_their_own_flag(tmp_path):
+    adapter, run = make_adapter(tmp_path)
+    adapter.disable_samba_account("alice")
+    adapter.enable_samba_account("alice")
+    assert [call[0] for call in run.calls] == [
+        ("smbpasswd", "-d", "alice"),
+        ("smbpasswd", "-e", "alice"),
+    ]
+
+
 def test_rename_samba_account_exports_imports_then_deletes(tmp_path, monkeypatch):
     no_such_user(monkeypatch)
     line = "alice:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"

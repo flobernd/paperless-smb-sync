@@ -1,3 +1,4 @@
+import fcntl
 from dataclasses import replace
 
 import pytest
@@ -103,6 +104,25 @@ def test_run_cycle_locked_uses_lock_file(tmp_path, capsys):
     system = FakeSystem()
     assert run_cycle_locked(CFG, api, system, lock_path=str(lock_path)) is True
     assert lock_path.exists()
+
+
+def test_cycle_runs_while_it_holds_the_lock(tmp_path):
+    lock_path = tmp_path / "lock"
+    seen = []
+
+    class ProbingApi(FakeApi):
+        def fetch_desired_users(self, group_name):
+            # a second open file description cannot take a held flock
+            with open(lock_path, "a", encoding="utf-8") as other:
+                try:
+                    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    seen.append("free")
+                except BlockingIOError:
+                    seen.append("held")
+            return []
+
+    run_cycle_locked(CFG, ProbingApi(), FakeSystem(), lock_path=str(lock_path))
+    assert seen == ["held"]
 
 
 class StopLoop(Exception):

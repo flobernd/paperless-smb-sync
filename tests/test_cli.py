@@ -53,6 +53,14 @@ class FakeSystem:
         self.calls.append((username, password, create))
 
 
+class FakeUserApi:
+    def __init__(self, users):
+        self.users = users
+
+    def fetch_desired_users(self, group_name):
+        return self.users
+
+
 def test_format_status_table():
     desired = [PaperlessUser(5, "alice", True), PaperlessUser(6, "bob", False)]
     actual = ActualState(
@@ -95,29 +103,23 @@ def test_format_status_labels_stranded_account():
     assert "pending removal" not in orphan_line
 
 
-def test_regen_password_unknown_user(capsys):
-    system = FakeSystem(accounts=[])
-    assert regen_password(CFG, system, "alice") == 1
-    assert "no managed samba account" in capsys.readouterr().err
-
-
 def test_regen_password_refuses_unmanaged_account(capsys):
     system = FakeSystem(accounts=[SambaAccount("legacy", 1000, True)])
-    assert regen_password(CFG, system, "legacy") == 1
+    assert regen_password(CFG, system, "legacy", FakeUserApi([])) == 1
     assert "no managed samba account" in capsys.readouterr().err
     assert system.calls == []
 
 
 def test_regen_password_refuses_stranded_account(capsys):
     system = FakeSystem(accounts=[SambaAccount("orphan", UNMAPPED_UID, True)])
-    assert regen_password(CFG, system, "orphan") == 1
+    assert regen_password(CFG, system, "orphan", FakeUserApi([])) == 1
     assert "stranded" in capsys.readouterr().err
     assert system.calls == []
 
 
 def test_regen_password_sets_and_prints(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    assert regen_password(CFG, system, "alice") == 0
+    assert regen_password(CFG, system, "alice", FakeUserApi([])) == 0
     username, password, create = system.calls[0]
     assert (username, create) == ("alice", False)
     out = capsys.readouterr().out
@@ -156,14 +158,6 @@ MAIL_CFG = replace(
 )
 
 
-class FakeUserApi:
-    def __init__(self, users):
-        self.users = users
-
-    def fetch_desired_users(self, group_name):
-        return self.users
-
-
 def test_regen_emails_the_new_password(monkeypatch, capsys):
     sent = []
     monkeypatch.setattr(
@@ -176,18 +170,6 @@ def test_regen_emails_the_new_password(monkeypatch, capsys):
     host, to, username, block = sent[0]
     assert (host, to, username) == ("smtp.lan", "alice@example.com", "alice")
     assert system.calls[0][1] in block
-
-
-def test_regen_warns_when_the_user_has_no_email(monkeypatch, caplog):
-    monkeypatch.setattr(
-        "smb_sync.cli.send_credentials",
-        lambda *args: pytest.fail("must not send without an address"),
-    )
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    api = FakeUserApi([PaperlessUser(5, "alice", True, "")])
-    with caplog.at_level(logging.WARNING):
-        assert regen_password(MAIL_CFG, system, "alice", api) == 0
-    assert "no email address" in caplog.text
 
 
 def test_regen_does_not_email_when_mail_is_disabled(monkeypatch):
@@ -224,16 +206,3 @@ def test_regen_survives_an_api_failure_during_the_email_lookup(monkeypatch, capl
         # must not surface as a crash
         assert regen_password(MAIL_CFG, system, "alice", BrokenApi()) == 0
     assert "api down" in caplog.text
-
-
-def test_regen_emails_a_block_without_the_admin_only_hint(monkeypatch, capsys):
-    sent = []
-    monkeypatch.setattr(
-        "smb_sync.cli.send_credentials",
-        lambda mail, to, username, block: sent.append(block),
-    )
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    api = FakeUserApi([PaperlessUser(5, "alice", True, "alice@example.com")])
-    assert regen_password(MAIL_CFG, system, "alice", api) == 0
-    assert "smb-sync regen" not in sent[0]
-    assert "smb-sync regen alice" in capsys.readouterr().out

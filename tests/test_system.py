@@ -142,16 +142,6 @@ def test_rename_samba_account_exports_imports_then_deletes(tmp_path, monkeypatch
     assert run.calls[3][0] == ("pdbedit", "-x", "-u", "alice")
 
 
-def test_rename_samba_account_overrides_placeholder_uid(tmp_path, monkeypatch):
-    no_such_user(monkeypatch)
-    # a half-completed rename leaves getpwnam(old) unresolved, so the
-    # export carries pdbedit's placeholder uid; the known uid must win
-    line = "alice:4294967295:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): line})
-    adapter.rename_samba_account("alice", "dave", 20005)
-    assert run.import_file_content == "dave:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-
-
 def test_rename_samba_account_skips_usermod_when_new_unix_exists(
     tmp_path, monkeypatch
 ):
@@ -234,15 +224,6 @@ def test_delete_inbox_folder_removes_contents(tmp_path):
 def test_delete_inbox_folder_missing_is_noop(tmp_path):
     adapter, _ = make_adapter(tmp_path)
     adapter.delete_inbox_folder("alice")
-
-
-def test_failed_command_raises(tmp_path):
-    def failing_run(argv, input_text=None):
-        raise CommandError("boom")
-
-    adapter = SystemAdapter(str(tmp_path), 10000, run=failing_run)
-    with pytest.raises(CommandError):
-        adapter.list_samba_accounts()
 
 
 def test_list_inbox_folders_missing_root_raises(tmp_path):

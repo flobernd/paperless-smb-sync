@@ -85,7 +85,7 @@ def regen_password(
     cfg: Config,
     system: SystemAdapter,
     username: str,
-    api: PaperlessClient | None = None,
+    api: PaperlessClient,
 ) -> int:
     account = next(
         (a for a in system.list_samba_accounts() if a.username == username),
@@ -106,7 +106,7 @@ def regen_password(
     password = generate_password()
     system.set_samba_password(username, password, create=False)
     print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
-    if not cfg.mail_enabled or api is None:
+    if not cfg.mail_enabled:
         return 0
     try:
         email = _email_of(api, cfg, username)

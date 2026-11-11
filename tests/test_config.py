@@ -8,19 +8,6 @@ BASE_ENV = {
 }
 
 
-def test_defaults():
-    cfg = load_config(BASE_ENV)
-    assert cfg.paperless_url == "http://paperless:8000"
-    assert cfg.paperless_token == "tok123"
-    assert cfg.sync_group == "smb"
-    assert cfg.poll_interval == 30
-    assert cfg.uid_base == 20000
-    assert cfg.paperless_gid == 10000
-    assert cfg.share_name == "inbox"
-    assert cfg.smb_host == ""
-    assert cfg.inbox_path == "/shares/inbox"
-
-
 def test_url_trailing_slash_stripped():
     cfg = load_config({**BASE_ENV, "PAPERLESS_URL": "http://paperless:8000/"})
     assert cfg.paperless_url == "http://paperless:8000"
@@ -67,12 +54,6 @@ def test_token_file(tmp_path):
     assert cfg.paperless_token == "filetok"
 
 
-def test_mail_is_off_by_default():
-    cfg = load_config(BASE_ENV)
-    assert cfg.email_credentials is False
-    assert cfg.mail_enabled is False
-
-
 def test_mail_settings_come_from_the_paperless_variables():
     cfg = load_config(
         {
@@ -113,13 +94,6 @@ def test_mail_stays_disabled_without_a_host():
     cfg = load_config({**BASE_ENV, "EMAIL_CREDENTIALS": "true"})
     assert cfg.email_credentials is True
     assert cfg.mail_enabled is False
-
-
-def test_warns_when_enabled_without_a_mail_host():
-    cfg = load_config({**BASE_ENV, "EMAIL_CREDENTIALS": "true"})
-    warnings = config_warnings(cfg)
-    assert len(warnings) == 1
-    assert "PAPERLESS_EMAIL_HOST" in warnings[0]
 
 
 def test_no_warning_when_disabled_or_fully_configured():

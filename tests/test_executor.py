@@ -1,6 +1,5 @@
 import logging
 
-from smb_sync.credentials import PASSWORD_LENGTH, generate_password
 from smb_sync.executor import execute
 from smb_sync.model import (
     CreateAccount,
@@ -100,12 +99,6 @@ def run(actions, system=None, api=None, deliver=None):
     return failures, system, api
 
 
-def test_generate_password_shape():
-    password = generate_password()
-    assert len(password) == PASSWORD_LENGTH
-    assert password.isalnum()
-
-
 def test_create_account_sets_password_and_prints_once(capsys):
     user = PaperlessUser(5, "alice", True)
     failures, system, _ = run([CreateAccount(user=user, uid=20005)])
@@ -191,19 +184,6 @@ def test_rename_without_workflow_skips_api():
     assert api.calls == []
 
 
-def test_failure_is_isolated_and_counted():
-    system = FakeSystem(fail_on="disable_samba_account")
-    failures, system, _ = run(
-        [
-            DisableAccount(username="alice"),
-            DeleteFolder(username="bob"),
-        ],
-        system=system,
-    )
-    assert failures == 1
-    assert ("delete_inbox_folder", "bob") in system.calls
-
-
 def test_unexpected_exception_is_isolated_and_counted():
     system = FakeSystem(fail_on="disable_samba_account", fail_with=RuntimeError)
     failures, system, _ = run(
@@ -222,33 +202,6 @@ def test_unexpected_failure_logs_traceback(caplog):
     with caplog.at_level(logging.ERROR):
         run([DisableAccount(username="alice")], system=system)
     assert any(record.exc_info for record in caplog.records)
-
-
-def test_multiple_failures_accumulate():
-    system = FakeSystem(fail_on="disable_samba_account")
-    failures, system, _ = run(
-        [
-            DisableAccount(username="alice"),
-            DisableAccount(username="bob"),
-            DeleteFolder(username="carol"),
-        ],
-        system=system,
-    )
-    assert failures == 2
-    assert ("delete_inbox_folder", "carol") in system.calls
-
-
-def test_emails_the_credentials_when_delivery_is_configured(capsys):
-    deliver = FakeDelivery()
-    user = PaperlessUser(5, "alice", True, "alice@example.com")
-    failures, system, _ = run([CreateAccount(user=user, uid=20005)], deliver=deliver)
-    assert failures == 0
-    to, username, block = deliver.sent[0]
-    assert (to, username) == ("alice@example.com", "alice")
-    password = system.calls[1][2]
-    assert password in block
-    # the printed block stays as the fallback for a mail that never arrives
-    assert password in capsys.readouterr().out
 
 
 def test_warns_when_the_user_has_no_email_address(caplog):

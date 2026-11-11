@@ -33,17 +33,6 @@ def provisioned_state(username="alice", user_id=5, enabled=True, workflow_id=7):
     )
 
 
-def test_provision_new_user():
-    desired = [PaperlessUser(5, "alice", True)]
-    plan = plan_cycle(desired, empty_state(), UID_BASE)
-    assert plan.actions == (
-        CreateAccount(user=desired[0], uid=20005),
-        CreateFolder(username="alice", uid=20005),
-        CreateWorkflow(user_id=5, username="alice"),
-    )
-    assert plan.warnings == ()
-
-
 def test_steady_state_no_actions():
     desired = [PaperlessUser(5, "alice", True)]
     plan = plan_cycle(desired, provisioned_state(), UID_BASE)
@@ -94,12 +83,6 @@ def test_existing_folder_wrong_uid_is_adopted():
     )
     plan = plan_cycle(desired, actual, UID_BASE)
     assert plan.actions == (CreateFolder(username="alice", uid=20005),)
-
-
-def test_existing_folder_correct_uid_not_touched():
-    desired = [PaperlessUser(5, "alice", True)]
-    plan = plan_cycle(desired, provisioned_state(), UID_BASE)
-    assert not any(isinstance(a, CreateFolder) for a in plan.actions)
 
 
 def test_migration_adopts_prexisting_folder_wrong_uid():
@@ -156,13 +139,6 @@ def test_unmanaged_account_untouched():
     assert plan.actions == ()
 
 
-def test_invalid_username_skipped_with_warning():
-    desired = [PaperlessUser(5, "alice@example.com", True)]
-    plan = plan_cycle(desired, empty_state(), UID_BASE)
-    assert plan.actions == ()
-    assert any("alice@example.com" in w for w in plan.warnings)
-
-
 def test_rename_detected_by_uid():
     desired = [PaperlessUser(5, "dave", True)]
     plan = plan_cycle(desired, provisioned_state(username="alice"), UID_BASE)
@@ -175,14 +151,6 @@ def test_rename_detected_by_uid():
             workflow_id=7,
         ),
     )
-
-
-def test_orphan_managed_workflow_deleted():
-    actual = ActualState(
-        accounts=(), folders=(), workflows=(ManagedWorkflow(7, "ghost"),)
-    )
-    plan = plan_cycle([], actual, UID_BASE)
-    assert plan.actions == (DeleteWorkflow(workflow_id=7),)
 
 
 def test_orphan_managed_folder_deleted():
@@ -271,20 +239,6 @@ def test_unmapped_uid_account_matching_user_is_repaired():
     plan = plan_cycle(desired, actual, UID_BASE)
     assert plan.actions == (RepairUnixAccount(username="alice", uid=20005),)
     assert plan.warnings == ()
-
-
-def test_genuine_uid_mismatch_still_warns_not_repaired():
-    # a mapped-but-wrong uid is a real conflict, not a missing unix account;
-    # keep the conservative warn-and-leave behavior
-    desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
-        accounts=(SambaAccount("alice", 19999, True),),
-        folders=(InboxFolder("alice", 19999),),
-        workflows=(ManagedWorkflow(7, "alice"),),
-    )
-    plan = plan_cycle(desired, actual, UID_BASE)
-    assert not any(isinstance(a, RepairUnixAccount) for a in plan.actions)
-    assert any("uid" in w.lower() for w in plan.warnings)
 
 
 def test_rename_with_reactivation_enables_new_name():

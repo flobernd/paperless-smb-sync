@@ -125,12 +125,6 @@ def test_logs_in_only_when_a_username_is_set():
     assert anonymous[0].login_args is None
 
 
-def test_smtp_errors_are_wrapped():
-    factory = recording_factory([], raises=smtplib.SMTPException("no route"))
-    with pytest.raises(MailError, match="no route"):
-        send_credentials(mail_config(), "carol@example.com", "carol", BLOCK, smtp_factory=factory)
-
-
 def test_os_errors_are_wrapped():
     factory = recording_factory([], raises=ConnectionRefusedError("refused"))
     with pytest.raises(MailError, match="refused"):

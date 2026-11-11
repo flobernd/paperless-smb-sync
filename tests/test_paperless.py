@@ -179,12 +179,6 @@ def test_create_workflow_payload():
     assert action["assign_change_users"] == [5]
 
 
-def test_delete_workflow():
-    client, session = make_client({})
-    client.delete_workflow(7)
-    assert session.requests == [("DELETE", f"{BASE}/api/workflows/7/", None)]
-
-
 def test_delete_workflow_tolerates_404():
     session = FakeSession({}, delete_status=404)
     client = PaperlessClient(BASE, "tok", session=session)

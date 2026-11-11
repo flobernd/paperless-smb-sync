@@ -37,7 +37,16 @@ def format_status(
     workflows = {w.username for w in actual.workflows}
     desired_names = {u.username for u in desired}
 
-    rows = [("USERNAME", "UID", "SAMBA", "FOLDER", "WORKFLOW")]
+    def status_row(username: str, uid: int, samba: str) -> tuple[str, ...]:
+        return (
+            username,
+            str(uid),
+            samba,
+            "yes" if username in folders else "no",
+            "yes" if username in workflows else "no",
+        )
+
+    rows: list[tuple[str, ...]] = [("USERNAME", "UID", "SAMBA", "FOLDER", "WORKFLOW")]
     for user in sorted(desired, key=lambda u: u.username):
         account = accounts.get(user.username)
         if account is None:
@@ -46,15 +55,7 @@ def format_status(
             samba = "enabled"
         else:
             samba = "disabled"
-        rows.append(
-            (
-                user.username,
-                str(uid_base + user.id),
-                samba,
-                "yes" if user.username in folders else "no",
-                "yes" if user.username in workflows else "no",
-            )
-        )
+        rows.append(status_row(user.username, uid_base + user.id, samba))
     for account in sorted(actual.accounts, key=lambda a: a.username):
         if account.uid >= uid_base and account.username not in desired_names:
             # a sentinel-uid account matching no desired user is excluded from
@@ -63,19 +64,11 @@ def format_status(
                 samba = "stranded, needs manual cleanup"
             else:
                 samba = "pending removal"
-            rows.append(
-                (
-                    account.username,
-                    str(account.uid),
-                    samba,
-                    "yes" if account.username in folders else "no",
-                    "yes" if account.username in workflows else "no",
-                )
-            )
+            rows.append(status_row(account.username, account.uid, samba))
 
-    widths = [max(len(row[i]) for row in rows) for i in range(5)]
+    widths = [max(map(len, column)) for column in zip(*rows)]
     return "\n".join(
-        "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        "  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
         for row in rows
     )
 
@@ -113,26 +106,23 @@ def regen_password(
     password = generate_password()
     system.set_samba_password(username, password, create=False)
     print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
-    if cfg.mail_enabled and api is not None:
-        try:
-            email = _email_of(api, cfg, username)
-        except PaperlessError as exc:
-            # the password is already changed and printed; an unreachable API
-            # costs the mail, not the command
-            log.error("could not look up the address for '%s': %s", username, exc)
-        else:
-            deliver_credentials(
-                partial(send_credentials, cfg.mail),
-                username,
-                email,
-                credentials_block(
-                    cfg.smb_host,
-                    cfg.share_name,
-                    username,
-                    password,
-                    regen_hint=False,
-                ),
-            )
+    if not cfg.mail_enabled or api is None:
+        return 0
+    try:
+        email = _email_of(api, cfg, username)
+    except PaperlessError as exc:
+        # the password is already changed and printed; an unreachable API
+        # costs the mail, not the command
+        log.error("could not look up the address for '%s': %s", username, exc)
+        return 0
+    deliver_credentials(
+        partial(send_credentials, cfg.mail),
+        email,
+        smb_host=cfg.smb_host,
+        share_name=cfg.share_name,
+        username=username,
+        password=password,
+    )
     return 0
 
 

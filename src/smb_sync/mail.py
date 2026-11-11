@@ -5,6 +5,7 @@ from email.message import EmailMessage
 from typing import Any
 
 from .config import MailConfig
+from .credentials import credentials_block
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,13 @@ def send_credentials(
 
 
 def deliver_credentials(
-    deliver: CredentialDelivery, username: str, email: str, block: str
+    deliver: CredentialDelivery,
+    email: str,
+    *,
+    smb_host: str,
+    share_name: str,
+    username: str,
+    password: str,
 ) -> None:
     if not email:
         log.warning(
@@ -66,6 +73,7 @@ def deliver_credentials(
             username,
         )
         return
+    block = credentials_block(smb_host, share_name, username, password, regen_hint=False)
     try:
         deliver(email, username, block)
         log.info("emailed credentials for '%s' to %s", username, email)

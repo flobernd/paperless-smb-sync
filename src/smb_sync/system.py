@@ -3,7 +3,8 @@ import pwd
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from pathlib import Path
 
 from .model import InboxFolder, SambaAccount
@@ -11,6 +12,21 @@ from .model import InboxFolder, SambaAccount
 
 class CommandError(Exception):
     pass
+
+
+@contextmanager
+def _command_error(what: str) -> Generator[None, None, None]:
+    try:
+        yield
+    except OSError as exc:
+        raise CommandError(f"{what}: {exc}") from exc
+
+
+def _unix_user(username: str) -> pwd.struct_passwd | None:
+    try:
+        return pwd.getpwnam(username)
+    except KeyError:
+        return None
 
 
 def _run(argv: list[str], input_text: str | None = None) -> str:
@@ -54,25 +70,22 @@ class SystemAdapter:
 
     def list_inbox_folders(self) -> list[InboxFolder]:
         folders = []
-        try:
-            with os.scandir(self._inbox) as entries:
-                for entry in entries:
-                    if entry.is_dir(follow_symlinks=False):
-                        folders.append(
-                            InboxFolder(name=entry.name, uid=entry.stat().st_uid)
-                        )
-        except OSError as exc:
-            raise CommandError(
-                f"cannot list inbox folders in '{self._inbox}': {exc}"
-            ) from exc
+        with (
+            _command_error(f"cannot list inbox folders in '{self._inbox}'"),
+            os.scandir(self._inbox) as entries,
+        ):
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    folders.append(
+                        InboxFolder(name=entry.name, uid=entry.stat().st_uid)
+                    )
         return folders
 
     # -- unix accounts -----------------------------------------------
 
     def create_unix_user(self, username: str, uid: int) -> None:
-        try:
-            existing = pwd.getpwnam(username)
-        except KeyError:
+        existing = _unix_user(username)
+        if existing is None:
             self._run(
                 [
                     "useradd",
@@ -97,16 +110,13 @@ class SystemAdapter:
             )
 
     def delete_unix_user(self, username: str) -> None:
-        try:
-            pwd.getpwnam(username)
-        except KeyError:
-            return
-        self._run(["userdel", username])
+        if _unix_user(username) is not None:
+            self._run(["userdel", username])
 
     # -- samba accounts ----------------------------------------------
 
     def set_samba_password(
-        self, username: str, password: str, create: bool = False
+        self, username: str, password: str, *, create: bool
     ) -> None:
         argv = ["smbpasswd", "-s"] + (["-a"] if create else []) + [username]
         self._run(argv, input_text=f"{password}\n{password}\n")
@@ -148,42 +158,32 @@ class SystemAdapter:
         parts = lines[old].split(":")
         parts[0] = new
         parts[1] = str(uid)  # exported uid is unreliable once getpwnam(old) fails
-        try:
-            pwd.getpwnam(new)
-        except KeyError:
+        if _unix_user(new) is None:
             self._run(["usermod", "--login", new, old])
-        fd, temp_path = tempfile.mkstemp(suffix=".smbpasswd")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(":".join(parts) + "\n")
-            self._run(["pdbedit", "-i", f"smbpasswd:{temp_path}"])
-        finally:
-            os.unlink(temp_path)
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", suffix=".smbpasswd"
+        ) as fh:
+            fh.write(":".join(parts) + "\n")
+            # pdbedit opens the file by name while this handle is still open
+            fh.flush()
+            self._run(["pdbedit", "-i", f"smbpasswd:{fh.name}"])
         self._run(["pdbedit", "-x", "-u", old])
 
     # -- inbox folders -----------------------------------------------
 
     def create_inbox_folder(self, username: str, uid: int) -> None:
         path = self._inbox / username
-        try:
+        with _command_error(f"cannot create inbox folder '{path}'"):
             path.mkdir(exist_ok=True)
             os.chown(path, uid, self._gid)
             path.chmod(0o2770)
-        except OSError as exc:
-            raise CommandError(
-                f"cannot create inbox folder '{path}': {exc}"
-            ) from exc
 
     def delete_inbox_folder(self, username: str) -> None:
         path = self._inbox / username
         if not path.exists():
             return
-        try:
+        with _command_error(f"cannot delete inbox folder '{path}'"):
             shutil.rmtree(path)
-        except OSError as exc:
-            raise CommandError(
-                f"cannot delete inbox folder '{path}': {exc}"
-            ) from exc
 
     def rename_inbox_folder(self, old: str, new: str) -> None:
         old_path = self._inbox / old
@@ -194,9 +194,7 @@ class SystemAdapter:
             raise CommandError(
                 f"cannot rename inbox folder '{old}': '{new}' already exists"
             )
-        try:
+        with _command_error(
+            f"cannot rename inbox folder '{old_path}' to '{new_path}'"
+        ):
             old_path.rename(new_path)
-        except OSError as exc:
-            raise CommandError(
-                f"cannot rename inbox folder '{old_path}' to '{new_path}': {exc}"
-            ) from exc

@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from functools import partial
 
 from .credentials import credentials_block, generate_password
 from .model import (
@@ -12,6 +13,7 @@ from .model import (
     DeleteWorkflow,
     DisableAccount,
     EnableAccount,
+    PaperlessUser,
     RenameUser,
     RepairUnixAccount,
 )
@@ -29,19 +31,13 @@ def execute(
     *,
     smb_host: str,
     share_name: str,
-    deliver: CredentialDelivery | None = None,
+    deliver: CredentialDelivery | None,
 ) -> int:
+    announce = partial(_announce_credentials, smb_host, share_name, deliver)
     failures = 0
     for action in actions:
         try:
-            _apply(
-                action,
-                system,
-                api,
-                smb_host=smb_host,
-                share_name=share_name,
-                deliver=deliver,
-            )
+            _apply(action, system, api, announce)
         except Exception as exc:
             failures += 1
             # exc_info so unexpected failures in a service that deletes
@@ -50,14 +46,30 @@ def execute(
     return failures
 
 
+def _announce_credentials(
+    smb_host: str,
+    share_name: str,
+    deliver: CredentialDelivery | None,
+    user: PaperlessUser,
+    password: str,
+) -> None:
+    print(credentials_block(smb_host, share_name, user.username, password), flush=True)
+    if deliver is not None:
+        deliver_credentials(
+            deliver,
+            user.email,
+            smb_host=smb_host,
+            share_name=share_name,
+            username=user.username,
+            password=password,
+        )
+
+
 def _apply(
     action: Action,
     system: SystemAdapter,
     api: PaperlessClient,
-    *,
-    smb_host: str,
-    share_name: str,
-    deliver: CredentialDelivery | None = None,
+    announce: Callable[[PaperlessUser, str], None],
 ) -> None:
     match action:
         case CreateAccount(user=user, uid=uid):
@@ -65,23 +77,7 @@ def _apply(
             password = generate_password()
             system.set_samba_password(user.username, password, create=True)
             log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
-            print(
-                credentials_block(smb_host, share_name, user.username, password),
-                flush=True,
-            )
-            if deliver is not None:
-                deliver_credentials(
-                    deliver,
-                    user.username,
-                    user.email,
-                    credentials_block(
-                        smb_host,
-                        share_name,
-                        user.username,
-                        password,
-                        regen_hint=False,
-                    ),
-                )
+            announce(user, password)
         case RepairUnixAccount(username=username, uid=uid):
             system.create_unix_user(username, uid)
             log.warning(

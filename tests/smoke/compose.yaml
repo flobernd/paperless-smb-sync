@@ -12,16 +12,18 @@ services:
       PAPERLESS_ADMIN_USER: admin
       PAPERLESS_ADMIN_PASSWORD: adminpass
       PAPERLESS_CONSUMER_RECURSIVE: "1"
+      USERMAP_GID: "10000"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${SMOKE_PORT:-8000}:8000"
     volumes:
       - inbox:/usr/src/paperless/consume
 
   smb:
-    build: ../..
+    image: ${SMOKE_IMAGE:-paperless-smb-sync:smoke}
     depends_on:
       - paperless
     environment:
+      CREDENTIALS_DOCUMENT: ${SMOKE_DOCUMENT:-false}
       PAPERLESS_URL: http://paperless:8000
       PAPERLESS_API_TOKEN: ${SMOKE_TOKEN:-unset}
       POLL_INTERVAL: "5"

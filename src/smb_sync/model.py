@@ -118,6 +118,7 @@ Action = (
 class Plan:
     actions: tuple[Action, ...]
     warnings: tuple[str, ...]
+    pending_removal: tuple[str, ...] = ()
 
 
 def workflow_filter(consume_path: str, username: str) -> str:

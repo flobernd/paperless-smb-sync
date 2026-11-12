@@ -6,10 +6,11 @@ from functools import partial
 from .config import Config, config_warnings, load_config
 from .credentials import credentials_block, generate_password
 from .mail import deliver_credentials, send_credentials
-from .model import ActualState, PaperlessUser
+from .model import ActualState, PaperlessUser, Plan, RenameUser
 from .paperless import PaperlessClient, PaperlessError
-from .service import run_cycle_locked, run_daemon
-from .system import INBOX_ROOT, SystemAdapter
+from .planner import counted_accounts, plan_cycle
+from .service import observe, run_cycle_locked, run_daemon
+from .system import INBOX_ROOT, CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
 
@@ -30,12 +31,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def format_status(
-    desired: list[PaperlessUser], actual: ActualState, uid_base: int
+    desired: list[PaperlessUser], actual: ActualState, plan: Plan, uid_base: int
 ) -> str:
-    accounts = {a.username: a for a in actual.accounts}
+    # the planner ignores an entry that does not count, so its user reads as
+    # missing
+    accounts = {a.username: a for a in counted_accounts(actual.accounts, uid_base)}
     folders = {f.name for f in actual.folders}
     workflows = {w.username for w in actual.workflows}
     desired_names = {u.username for u in desired}
+    renamed_to = {
+        a.old_username: a.new_username
+        for a in plan.actions
+        if isinstance(a, RenameUser)
+    }
 
     def status_row(username: str, uid: int | None, samba: str) -> tuple[str, ...]:
         return (
@@ -59,21 +67,22 @@ def format_status(
     for account in sorted(actual.accounts, key=lambda a: a.username):
         if account.username in desired_names:
             continue
-        # the planner leaves an entry that stores no uid untouched, so it must
-        # not read as pending removal
-        if account.uid is None:
-            samba = "stranded, needs manual cleanup"
-        elif account.uid >= uid_base:
+        if account.username in renamed_to:
+            samba = f"renaming to {renamed_to[account.username]}"
+        elif account.username in plan.pending_removal:
             samba = "pending removal"
         else:
-            continue
+            samba = "left untouched"
         rows.append(status_row(account.username, account.uid, samba))
 
     widths = [max(map(len, column)) for column in zip(*rows)]
-    return "\n".join(
+    lines = [
         "  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip()
         for row in rows
-    )
+    ]
+    if plan.warnings:
+        lines += ["", "Warnings:", *(f"  {warning}" for warning in plan.warnings)]
+    return "\n".join(lines)
 
 
 def _email_of(api: PaperlessClient, cfg: Config, username: str) -> str:
@@ -148,14 +157,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "sync":
         return 0 if run_cycle_locked(cfg, api, system) else 1
     if args.command == "status":
-        desired = api.fetch_desired_users(cfg.sync_group)
-        actual = ActualState(
-            accounts=tuple(system.list_samba_accounts()),
-            folders=tuple(system.list_inbox_folders()),
-            workflows=tuple(api.fetch_managed_workflows()),
-            unix_uids=system.list_unix_uids(),
-        )
-        print(format_status(desired, actual, cfg.uid_base))
+        try:
+            desired, actual = observe(cfg, api, system)
+        except (CommandError, OSError, PaperlessError) as exc:
+            print(f"smb-sync: {exc}", file=sys.stderr)
+            return 1
+        plan = plan_cycle(desired, actual, cfg.uid_base, cfg.consume_path)
+        print(format_status(desired, actual, plan, cfg.uid_base))
         return 0
     if args.command == "regen":
         return regen_password(cfg, system, args.username, api)

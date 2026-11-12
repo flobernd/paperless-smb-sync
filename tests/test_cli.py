@@ -13,6 +13,7 @@ from smb_sync.model import (
     SambaAccount,
 )
 from smb_sync.paperless import PaperlessError
+from smb_sync.planner import plan_cycle
 
 # defined locally because pytest does not import test modules as a package
 NO_MAIL = MailConfig(
@@ -60,19 +61,20 @@ class FakeUserApi:
         return self.users
 
 
+CONSUME = "/usr/src/paperless/consume"
+
+
 def test_format_status_table():
     desired = [PaperlessUser(5, "alice", True), PaperlessUser(6, "bob", False)]
     actual = ActualState(
-        accounts=(
-            SambaAccount("alice", 20005, True),
-            SambaAccount("gone", 20009, True),
-        ),
+        accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
         workflows=(
             ManagedWorkflow(7, "alice", "/usr/src/paperless/consume/alice/*"),
         ),
     )
-    output = format_status(desired, actual, 20000)
+    plan = plan_cycle(desired, actual, 20000, CONSUME)
+    output = format_status(desired, actual, plan, 20000)
     lines = output.splitlines()
     assert "USERNAME" in lines[0]
     alice_line = next(line for line in lines if line.startswith("alice"))
@@ -80,28 +82,32 @@ def test_format_status_table():
     assert "yes" in alice_line
     bob_line = next(line for line in lines if line.startswith("bob"))
     assert "missing" in bob_line
-    gone_line = next(line for line in lines if line.startswith("gone"))
-    assert "pending removal" in gone_line
 
 
-def test_format_status_labels_stranded_account():
-    # the planner leaves an entry without a stored uid untouched when it
-    # matches no desired user, so it must not read as "pending removal"
-    desired = [PaperlessUser(5, "alice", True)]
+def test_status_labels_follow_the_plan():
+    desired = [
+        PaperlessUser(5, "dave", True),
+        PaperlessUser(6, "Bad Name", True),
+        PaperlessUser(7, "carol", True),
+    ]
     actual = ActualState(
         accounts=(
             SambaAccount("alice", 20005, True),
-            SambaAccount("orphan", None, True),
+            SambaAccount("bob", 20006, True),
+            SambaAccount("carol", None, True),
+            SambaAccount("gone", 20009, True),
         ),
         folders=(),
         workflows=(),
+        unix_uids={"alice": 20005, "bob": 20006, "gone": 20009},
     )
-    output = format_status(desired, actual, 20000)
-    orphan_line = next(
-        line for line in output.splitlines() if line.startswith("orphan")
-    )
-    assert "stranded" in orphan_line
-    assert "pending removal" not in orphan_line
+    plan = plan_cycle(desired, actual, 20000, CONSUME)
+    text = format_status(desired, actual, plan, 20000)
+    rows = {line.split()[0]: line for line in text.splitlines() if line.strip()}
+    assert "renaming to dave" in rows["alice"]
+    assert "left untouched" in rows["bob"]
+    assert "pending removal" in rows["gone"]
+    assert "missing" in rows["carol"]
 
 
 def test_regen_password_refuses_unmanaged_account(capsys):
@@ -154,6 +160,24 @@ def test_main_regen_unknown_account(monkeypatch, capsys):
     )
     assert main(["regen", "ghost"]) == 1
     assert "no managed samba account" in capsys.readouterr().err
+
+
+def test_main_status_reports_an_api_failure_in_one_line(monkeypatch, capsys):
+    class DownApi:
+        def fetch_desired_users(self, group_name):
+            raise PaperlessError("api down")
+
+    monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
+    monkeypatch.setattr(
+        "smb_sync.cli.PaperlessClient", lambda url, token, consume: DownApi()
+    )
+    monkeypatch.setattr(
+        "smb_sync.cli.SystemAdapter", lambda root, gid: FakeSystem(accounts=[])
+    )
+    assert main(["status"]) == 1
+    err = capsys.readouterr().err
+    assert "smb-sync: api down" in err.splitlines()
+    assert "Traceback" not in err
 
 
 MAIL_CFG = replace(

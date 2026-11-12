@@ -7,7 +7,7 @@ from functools import partial
 from .config import Config
 from .executor import execute
 from .mail import send_credentials
-from .model import ActualState
+from .model import ActualState, PaperlessUser
 from .paperless import PaperlessClient, PaperlessError
 from .planner import plan_cycle
 from .system import CommandError, SystemAdapter
@@ -42,6 +42,20 @@ class WarningRepeat:
         return due
 
 
+def observe(
+    cfg: Config, api: PaperlessClient, system: SystemAdapter
+) -> tuple[list[PaperlessUser], ActualState]:
+    desired = api.fetch_desired_users(cfg.sync_group)
+    workflows = api.fetch_managed_workflows()
+    actual = ActualState(
+        accounts=tuple(system.list_samba_accounts()),
+        folders=tuple(system.list_inbox_folders()),
+        workflows=tuple(workflows),
+        unix_uids=system.list_unix_uids(),
+    )
+    return desired, actual
+
+
 def run_cycle(
     cfg: Config,
     api: PaperlessClient,
@@ -49,19 +63,11 @@ def run_cycle(
     repeat: WarningRepeat | None = None,
 ) -> bool:
     try:
-        desired = api.fetch_desired_users(cfg.sync_group)
-        workflows = api.fetch_managed_workflows()
+        desired, actual = observe(cfg, api, system)
     except PaperlessError as exc:
         # an unreachable API must never look like "no users"
         log.error("paperless API unavailable, skipping cycle: %s", exc)
         return False
-    try:
-        actual = ActualState(
-            accounts=tuple(system.list_samba_accounts()),
-            folders=tuple(system.list_inbox_folders()),
-            workflows=tuple(workflows),
-            unix_uids=system.list_unix_uids(),
-        )
     except (CommandError, OSError) as exc:
         log.error("failed to read local state, skipping cycle: %s", exc)
         return False

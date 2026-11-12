@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from .model import (
     Action,
@@ -17,12 +17,21 @@ from .model import (
     Plan,
     RenameUser,
     RepairUnixAccount,
+    SambaAccount,
     UpdateWorkflow,
     workflow_filter,
 )
 
 # useradd-compatible names only; anything else is skipped with a warning
 _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
+def counted_accounts(
+    accounts: Iterable[SambaAccount], uid_base: int
+) -> tuple[SambaAccount, ...]:
+    # the uid goes into an entry last in a creation, so an entry without one
+    # is either unfinished or not the daemon's
+    return tuple(a for a in accounts if a.uid is not None and a.uid >= uid_base)
 
 
 def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
@@ -81,11 +90,7 @@ def plan_cycle(
                 f"skipped (rename the user in paperless to provision it)"
             )
 
-    # the uid goes into an entry last in a creation, so an entry without one
-    # is either unfinished or not the daemon's
-    counted = tuple(
-        a for a in actual.accounts if a.uid is not None and a.uid >= uid_base
-    )
+    counted = counted_accounts(actual.accounts, uid_base)
     accounts_by_name = {a.username: a for a in counted}
     accounts_by_uid = {a.uid: a for a in counted}
     folders_by_name = {f.name: f for f in actual.folders}
@@ -241,4 +246,8 @@ def plan_cycle(
         ):
             actions.append(DeleteWorkflow(workflow_id=workflow.id))
 
-    return Plan(actions=tuple(actions), warnings=tuple(warnings))
+    return Plan(
+        actions=tuple(actions),
+        warnings=tuple(warnings),
+        pending_removal=tuple(candidates),
+    )

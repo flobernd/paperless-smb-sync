@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from smb_sync.config import Config, MailConfig
+from smb_sync.config import Config
 from smb_sync.model import PaperlessUser, SambaAccount, TokenUser
 from smb_sync.paperless import PaperlessError
 from smb_sync.service import (
@@ -18,16 +18,6 @@ from smb_sync.service import (
 )
 from smb_sync.system import CommandError
 
-NO_MAIL = MailConfig(
-    host="",
-    port=25,
-    username="",
-    password="",
-    use_tls=False,
-    use_ssl=False,
-    sender="smb-sync@localhost",
-)
-
 CFG = Config(
     paperless_url="http://x",
     paperless_token="tok",
@@ -39,8 +29,6 @@ CFG = Config(
     smb_host="",
     consume_path="/usr/src/paperless/consume",
     credentials_document=False,
-    email_credentials=False,
-    mail=NO_MAIL,
 )
 
 
@@ -227,36 +215,6 @@ def test_cycle_without_repeat_logs_a_standing_warning(caplog):
     with caplog.at_level(logging.WARNING):
         run_cycle(CFG, api, FakeSystem())
     assert "'Bad Name'" in caplog.text
-
-
-MAIL_CFG = replace(
-    CFG,
-    email_credentials=True,
-    mail=replace(NO_MAIL, host="smtp.lan", sender="scans@example.com"),
-)
-
-
-def test_credentials_are_emailed_when_mail_is_enabled(monkeypatch, capsys):
-    sent = []
-    monkeypatch.setattr(
-        "smb_sync.service.send_credentials",
-        lambda mail, to, username, block: sent.append((mail.host, to, username, block)),
-    )
-    api = FakeApi(users=[PaperlessUser(5, "alice", True, "alice@example.com")])
-    assert run_cycle(MAIL_CFG, api, FakeSystem()) is True
-    host, to, username, block = sent[0]
-    assert (host, to, username) == ("smtp.lan", "alice@example.com", "alice")
-    assert "SMB credentials for 'alice'" in block
-
-
-def test_nothing_is_emailed_when_mail_is_disabled(monkeypatch, capsys):
-    sent = []
-    monkeypatch.setattr(
-        "smb_sync.service.send_credentials", lambda *args: sent.append(args)
-    )
-    api = FakeApi(users=[PaperlessUser(5, "alice", True, "alice@example.com")])
-    assert run_cycle(CFG, api, FakeSystem()) is True
-    assert sent == []
 
 
 DOCUMENT_CFG = replace(CFG, credentials_document=True)

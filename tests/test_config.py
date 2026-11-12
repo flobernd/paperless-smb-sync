@@ -1,6 +1,6 @@
 import pytest
 
-from smb_sync.config import config_warnings, load_config
+from smb_sync.config import load_config
 
 BASE_ENV = {
     "PAPERLESS_URL": "http://paperless:8000",
@@ -87,56 +87,6 @@ def test_blank_token_raises(tmp_path):
         )
     with pytest.raises(ValueError, match="PAPERLESS_API_TOKEN"):
         load_config({"PAPERLESS_URL": "http://x", "PAPERLESS_API_TOKEN": "   "})
-
-
-def test_mail_settings_come_from_the_paperless_variables():
-    cfg = load_config(
-        {
-            **BASE_ENV,
-            "EMAIL_CREDENTIALS": "true",
-            "PAPERLESS_EMAIL_HOST": "smtp.lan",
-            "PAPERLESS_EMAIL_PORT": "587",
-            "PAPERLESS_EMAIL_HOST_USER": "paperless@example.com",
-            "PAPERLESS_EMAIL_HOST_PASSWORD": "smtp-secret",
-            "PAPERLESS_EMAIL_USE_TLS": "true",
-            "PAPERLESS_EMAIL_FROM": "scans@example.com",
-        }
-    )
-    assert cfg.mail_enabled is True
-    assert cfg.mail.host == "smtp.lan"
-    assert cfg.mail.port == 587
-    assert cfg.mail.username == "paperless@example.com"
-    assert cfg.mail.password == "smtp-secret"
-    assert cfg.mail.use_tls is True
-    assert cfg.mail.use_ssl is False
-    assert cfg.mail.sender == "scans@example.com"
-
-
-def test_sender_falls_back_to_the_smtp_login():
-    cfg = load_config(
-        {
-            **BASE_ENV,
-            "EMAIL_CREDENTIALS": "1",
-            "PAPERLESS_EMAIL_HOST": "smtp.lan",
-            "PAPERLESS_EMAIL_HOST_USER": "paperless@example.com",
-        }
-    )
-    assert cfg.mail.sender == "paperless@example.com"
-    assert cfg.mail.port == 25
-
-
-def test_mail_stays_disabled_without_a_host():
-    cfg = load_config({**BASE_ENV, "EMAIL_CREDENTIALS": "true"})
-    assert cfg.email_credentials is True
-    assert cfg.mail_enabled is False
-
-
-def test_no_warning_when_disabled_or_fully_configured():
-    assert config_warnings(load_config(BASE_ENV)) == ()
-    configured = load_config(
-        {**BASE_ENV, "EMAIL_CREDENTIALS": "true", "PAPERLESS_EMAIL_HOST": "smtp.lan"}
-    )
-    assert config_warnings(configured) == ()
 
 
 def test_token_and_token_file_conflict(tmp_path):

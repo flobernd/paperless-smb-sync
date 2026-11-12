@@ -20,7 +20,6 @@ from .model import (
     RepairUnixAccount,
     UpdateWorkflow,
 )
-from .mail import CredentialDelivery, deliver_credentials
 from .paperless import PaperlessClient, PaperlessError
 from .system import SystemAdapter
 
@@ -34,12 +33,9 @@ def execute(
     *,
     smb_host: str,
     share_name: str,
-    deliver: CredentialDelivery | None,
     upload: bool,
 ) -> int:
-    announce = partial(
-        _announce_credentials, api, smb_host, share_name, deliver, upload
-    )
+    announce = partial(_announce_credentials, api, smb_host, share_name, upload)
     failures = 0
     for action in actions:
         try:
@@ -56,21 +52,11 @@ def _announce_credentials(
     api: PaperlessClient,
     smb_host: str,
     share_name: str,
-    deliver: CredentialDelivery | None,
     upload: bool,
     user: PaperlessUser,
     password: str,
 ) -> None:
     print(credentials_block(smb_host, share_name, user.username, password), flush=True)
-    if deliver is not None:
-        deliver_credentials(
-            deliver,
-            user.email,
-            smb_host=smb_host,
-            share_name=share_name,
-            username=user.username,
-            password=password,
-        )
     if not upload:
         return
     block = credentials_block(

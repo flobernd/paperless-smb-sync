@@ -2,11 +2,9 @@ import argparse
 import logging
 import sys
 import time
-from functools import partial
 
-from .config import Config, config_warnings, load_config
+from .config import Config, load_config
 from .credentials import credentials_block, generate_password
-from .mail import deliver_credentials, send_credentials
 from .model import ActualState, PaperlessUser, Plan, RenameUser
 from .paperless import PaperlessClient, PaperlessError
 from .planner import (
@@ -104,14 +102,6 @@ def format_status(
     return "\n".join(lines)
 
 
-def _email_of(api: PaperlessClient, cfg: Config, username: str) -> str:
-    user = next(
-        (u for u in api.fetch_desired_users(cfg.sync_group) if u.username == username),
-        None,
-    )
-    return user.email if user is not None else ""
-
-
 def _update_document(
     cfg: Config, api: PaperlessClient, username: str, user_id: int, password: str
 ) -> None:
@@ -173,23 +163,6 @@ def regen_password(
     print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
     if cfg.credentials_document:
         _update_document(cfg, api, username, stored_uid - cfg.uid_base, password)
-    if not cfg.mail_enabled:
-        return 0
-    try:
-        email = _email_of(api, cfg, username)
-    except PaperlessError as exc:
-        # the password is already changed and printed; an unreachable API
-        # costs the mail, not the command
-        log.error("could not look up the address for '%s': %s", username, exc)
-        return 0
-    deliver_credentials(
-        partial(send_credentials, cfg.mail),
-        email,
-        smb_host=cfg.smb_host,
-        share_name=cfg.share_name,
-        username=username,
-        password=password,
-    )
     return 0
 
 
@@ -222,10 +195,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"smb-sync: {exc}", file=sys.stderr)
             return 1
         return 0 if failures == 0 else 1
-    # the start runs check and restore, and Docker runs health every 30 s, so
-    # only the commands below log the warnings
-    for warning in config_warnings(cfg):
-        log.warning("%s", warning)
     if args.command == "run":
         run_daemon(cfg, api, system)
         return 0

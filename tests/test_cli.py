@@ -1,10 +1,8 @@
 import logging
 from dataclasses import replace
 
-import pytest
-
 from smb_sync.cli import format_status, main, regen_password
-from smb_sync.config import Config, MailConfig
+from smb_sync.config import Config
 from smb_sync.model import (
     ActualState,
     CredentialDocument,
@@ -18,16 +16,6 @@ from smb_sync.paperless import PaperlessError
 from smb_sync.planner import plan_cycle
 
 # defined locally because pytest does not import test modules as a package
-NO_MAIL = MailConfig(
-    host="",
-    port=25,
-    username="",
-    password="",
-    use_tls=False,
-    use_ssl=False,
-    sender="smb-sync@localhost",
-)
-
 CFG = Config(
     paperless_url="http://x",
     paperless_token="tok",
@@ -39,8 +27,6 @@ CFG = Config(
     smb_host="",
     consume_path="/usr/src/paperless/consume",
     credentials_document=False,
-    email_credentials=False,
-    mail=NO_MAIL,
 )
 
 
@@ -54,14 +40,6 @@ class FakeSystem:
 
     def set_samba_password(self, username, password, create=False):
         self.calls.append((username, password, create))
-
-
-class FakeUserApi:
-    def __init__(self, users):
-        self.users = users
-
-    def fetch_desired_users(self, group_name):
-        return self.users
 
 
 CONSUME = "/usr/src/paperless/consume"
@@ -115,21 +93,21 @@ def test_status_labels_follow_the_plan():
 
 def test_regen_password_refuses_unmanaged_account(capsys):
     system = FakeSystem(accounts=[SambaAccount("legacy", 1000, True)])
-    assert regen_password(CFG, system, "legacy", FakeUserApi([])) == 1
+    assert regen_password(CFG, system, "legacy", object()) == 1
     assert "no managed samba account" in capsys.readouterr().err
     assert system.calls == []
 
 
 def test_regen_password_refuses_an_entry_without_stored_uid(capsys):
     system = FakeSystem(accounts=[SambaAccount("orphan", None, True)])
-    assert regen_password(CFG, system, "orphan", FakeUserApi([])) == 1
+    assert regen_password(CFG, system, "orphan", object()) == 1
     assert "stores no uid" in capsys.readouterr().err
     assert system.calls == []
 
 
 def test_regen_password_sets_and_prints(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    assert regen_password(CFG, system, "alice", FakeUserApi([])) == 0
+    assert regen_password(CFG, system, "alice", object()) == 0
     username, password, create = system.calls[0]
     assert (username, create) == ("alice", False)
     out = capsys.readouterr().out
@@ -183,65 +161,6 @@ def test_main_status_reports_an_api_failure_in_one_line(monkeypatch, capsys):
     assert "Traceback" not in err
 
 
-MAIL_CFG = replace(
-    CFG,
-    email_credentials=True,
-    mail=replace(NO_MAIL, host="smtp.lan", sender="scans@example.com"),
-)
-
-
-def test_regen_emails_the_new_password(monkeypatch, capsys):
-    sent = []
-    monkeypatch.setattr(
-        "smb_sync.cli.send_credentials",
-        lambda mail, to, username, block: sent.append((mail.host, to, username, block)),
-    )
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    api = FakeUserApi([PaperlessUser(5, "alice", True, "alice@example.com")])
-    assert regen_password(MAIL_CFG, system, "alice", api) == 0
-    host, to, username, block = sent[0]
-    assert (host, to, username) == ("smtp.lan", "alice@example.com", "alice")
-    assert system.calls[0][1] in block
-
-
-def test_regen_does_not_email_when_mail_is_disabled(monkeypatch):
-    monkeypatch.setattr(
-        "smb_sync.cli.send_credentials",
-        lambda *args: pytest.fail("mail is disabled"),
-    )
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    api = FakeUserApi([PaperlessUser(5, "alice", True, "alice@example.com")])
-    assert regen_password(CFG, system, "alice", api) == 0
-
-
-def test_main_logs_config_warnings(monkeypatch, caplog):
-    monkeypatch.setattr(
-        "smb_sync.cli.load_config",
-        lambda: replace(CFG, email_credentials=True),
-    )
-    monkeypatch.setattr(
-        "smb_sync.cli.PaperlessClient", lambda url, token, consume: None
-    )
-    monkeypatch.setattr("smb_sync.cli.SystemAdapter", lambda path, gid: None)
-    monkeypatch.setattr("smb_sync.cli.run_daemon", lambda cfg, api, system: None)
-    with caplog.at_level(logging.WARNING):
-        assert main(["run"]) == 0
-    assert "PAPERLESS_EMAIL_HOST" in caplog.text
-
-
-def test_regen_survives_an_api_failure_during_the_email_lookup(monkeypatch, caplog):
-    class BrokenApi:
-        def fetch_desired_users(self, group_name):
-            raise PaperlessError("api down")
-
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    with caplog.at_level(logging.ERROR):
-        # the password is already changed by this point, so a lookup failure
-        # must not surface as a crash
-        assert regen_password(MAIL_CFG, system, "alice", BrokenApi()) == 0
-    assert "api down" in caplog.text
-
-
 class FakeDocumentApi:
     def __init__(self, documents):
         self.documents = documents
@@ -278,6 +197,7 @@ def test_regen_adds_a_version_to_the_document_of_the_user(capsys):
     (document_id, block), = api.versions
     assert document_id == 40
     assert system.calls[0][1] in block
+    assert "smb-sync regen" not in block
     assert api.uploaded == []
 
 

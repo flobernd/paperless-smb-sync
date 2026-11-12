@@ -14,7 +14,6 @@ from smb_sync.model import (
     RepairUnixAccount,
     UpdateWorkflow,
 )
-from smb_sync.mail import MailError
 from smb_sync.paperless import PaperlessError
 from smb_sync.system import CommandError
 
@@ -67,12 +66,14 @@ class FakeSystem:
 class FakeApi:
     def __init__(self, fail_upload=False):
         self.calls = []
+        self.blocks = []
         self.fail_upload = fail_upload
 
     def upload_credentials(self, user_id, username, block):
         if self.fail_upload:
             raise PaperlessError("upload refused")
         self.calls.append(("upload_credentials", user_id, username))
+        self.blocks.append(block)
 
     def create_workflow(self, user_id, username):
         self.calls.append(("create_workflow", user_id, username))
@@ -84,18 +85,7 @@ class FakeApi:
         self.calls.append(("update_workflow", workflow_id, user_id, username))
 
 
-class FakeDelivery:
-    def __init__(self, fail=False):
-        self.sent = []
-        self.fail = fail
-
-    def __call__(self, to, username, block):
-        if self.fail:
-            raise MailError("smtp down")
-        self.sent.append((to, username, block))
-
-
-def run(actions, system=None, api=None, deliver=None, upload=False):
+def run(actions, system=None, api=None, upload=False):
     system = system or FakeSystem()
     api = api or FakeApi()
     failures = execute(
@@ -104,7 +94,6 @@ def run(actions, system=None, api=None, deliver=None, upload=False):
         api,
         smb_host="nas.lan",
         share_name="inbox",
-        deliver=deliver,
         upload=upload,
     )
     return failures, system, api
@@ -256,30 +245,6 @@ def test_unexpected_failure_logs_traceback(caplog):
     assert any(record.exc_info for record in caplog.records)
 
 
-def test_warns_when_the_user_has_no_email_address(caplog):
-    deliver = FakeDelivery()
-    user = PaperlessUser(5, "alice", True, "")
-    with caplog.at_level(logging.WARNING):
-        failures, _, _ = run([CreateAccount(user=user, uid=20005)], deliver=deliver)
-    assert failures == 0
-    assert deliver.sent == []
-    assert "no email address" in caplog.text
-
-
-def test_a_failed_mail_does_not_fail_provisioning(caplog):
-    deliver = FakeDelivery(fail=True)
-    user = PaperlessUser(5, "alice", True, "alice@example.com")
-    with caplog.at_level(logging.ERROR):
-        failures, system, _ = run([CreateAccount(user=user, uid=20005)], deliver=deliver)
-    assert failures == 0
-    assert [call[0] for call in system.calls] == [
-        "create_unix_user",
-        "set_samba_password",
-        "store_uid",
-    ]
-    assert "smtp down" in caplog.text
-
-
 def test_a_failed_upload_does_not_fail_the_creation(caplog):
     user = PaperlessUser(5, "alice", True)
     with caplog.at_level(logging.ERROR):
@@ -293,11 +258,12 @@ def test_a_failed_upload_does_not_fail_the_creation(caplog):
     assert "upload refused" in caplog.text
 
 
-def test_the_emailed_block_drops_the_admin_only_regen_hint(capsys):
-    deliver = FakeDelivery()
-    user = PaperlessUser(5, "alice", True, "alice@example.com")
-    run([CreateAccount(user=user, uid=20005)], deliver=deliver)
-    _, _, block = deliver.sent[0]
+def test_the_uploaded_block_drops_the_lines_for_the_log(capsys):
+    api = FakeApi()
+    user = PaperlessUser(5, "alice", True)
+    run([CreateAccount(user=user, uid=20005)], api=api, upload=True)
+    (block,) = api.blocks
+    assert "Username: alice" in block
     assert "smb-sync regen" not in block
-    # the log keeps it, since that is where an admin can act on it
+    # the log keeps the hint, since that is where an admin can act on it
     assert "smb-sync regen alice" in capsys.readouterr().out

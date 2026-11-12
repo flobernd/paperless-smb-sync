@@ -3,12 +3,10 @@ import logging
 import os
 import time
 from collections.abc import Callable, Sequence
-from functools import partial
 from pathlib import Path
 
 from .config import Config
 from .executor import execute
-from .mail import send_credentials
 from .model import ActualState, CredentialDocument, PaperlessUser, TokenUser
 from .paperless import PaperlessClient, PaperlessError
 from .planner import counted_uid, plan_cycle
@@ -105,7 +103,6 @@ def run_cycle(
         api,
         smb_host=cfg.smb_host,
         share_name=cfg.share_name,
-        deliver=partial(send_credentials, cfg.mail) if cfg.mail_enabled else None,
         upload=actual.token_user is not None and actual.token_user.is_superuser,
     )
     return failures == 0

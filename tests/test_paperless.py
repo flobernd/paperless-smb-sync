@@ -77,30 +77,6 @@ def test_fetch_desired_users_filters_by_group():
     ]
 
 
-def test_fetch_desired_users_carries_the_email_address():
-    client, _ = make_client(
-        {
-            f"{BASE}/api/groups/": page([{"id": 3, "name": "smb"}]),
-            f"{BASE}/api/users/": page(
-                [
-                    {
-                        "id": 5,
-                        "username": "alice",
-                        "is_active": True,
-                        "groups": [3],
-                        "email": "alice@example.com",
-                    },
-                    {"id": 6, "username": "bob", "is_active": True, "groups": [3]},
-                ]
-            ),
-        }
-    )
-    users = client.fetch_desired_users("smb")
-    assert users[0].email == "alice@example.com"
-    # paperless omits the field for users who never set one
-    assert users[1].email == ""
-
-
 def test_pagination_followed():
     client, _ = make_client(
         {

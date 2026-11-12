@@ -1,7 +1,7 @@
 import secrets
 import string
 
-# letters and digits only; symbols are painful to type on scanner keypads
+# letters and digits alone, since symbols are painful to type on a scanner keypad
 _ALPHABET = string.ascii_letters + string.digits
 PASSWORD_LENGTH = 20
 

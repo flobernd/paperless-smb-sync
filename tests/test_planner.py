@@ -103,7 +103,7 @@ def test_missing_folder_and_workflow_repaired():
 
 def test_existing_folder_wrong_uid_is_adopted():
     # steady state: the folder is present under the right name but carries a
-    # stale uid; correct its ownership so the new account can write to it
+    # stale uid, so the planner corrects its owner for the account to write to it
     desired = [PaperlessUser(5, "alice", True)]
     actual = ActualState(
         accounts=(SambaAccount("alice", 20005, True),),
@@ -115,9 +115,9 @@ def test_existing_folder_wrong_uid_is_adopted():
     assert plan.actions == (CreateFolder(username="alice", uid=20005),)
 
 
-def test_migration_adopts_prexisting_folder_wrong_uid():
-    # first sync after migration: no account yet, but the legacy inbox
-    # folder already exists under a non-managed uid and must be adopted
+def test_new_account_adopts_an_existing_folder_with_another_uid():
+    # no account yet, but an inbox folder of that name exists under another
+    # uid and must be adopted
     desired = [PaperlessUser(5, "alice", True)]
     actual = ActualState(
         accounts=(),
@@ -314,7 +314,7 @@ def test_rename_with_deactivation_disables_new_name():
 
 def test_stale_folder_with_desired_uid_frozen_with_warning():
     # in a half-completed rename the old folder still carries the real
-    # uid of a desired user; deleting it would destroy that user's data
+    # uid of a desired user, so deleting it would destroy that user's data
     desired = [PaperlessUser(5, "dave", True)]
     actual = ActualState(
         accounts=(), folders=(InboxFolder("alice", 20005),), workflows=()

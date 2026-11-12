@@ -209,6 +209,4 @@ def main(argv: list[str] | None = None) -> int:
         plan = plan_cycle(desired, actual, cfg.uid_base, cfg.consume_path)
         print(format_status(desired, actual, plan, cfg.uid_base))
         return 0
-    if args.command == "regen":
-        return regen_password(cfg, system, args.username, api)
-    return 2
+    return regen_password(cfg, system, args.username, api)

@@ -32,7 +32,8 @@ NO_SUPERUSER_WARNING = (
     "credentials document is made"
 )
 
-# useradd-compatible names only; anything else is skipped with a warning
+# useradd-compatible names alone. A user with another name is skipped with a
+# warning.
 _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
@@ -66,8 +67,8 @@ def _missing_resources(
     consume_path: str,
 ) -> list[Action]:
     actions: list[Action] = []
-    # an existing folder is adopted rather than recreated; correcting its
-    # owner uid also brings a pre-migration folder under management
+    # an existing folder is adopted rather than recreated. Correcting its owner
+    # uid also takes over a folder of that name that exists under another uid.
     folder = folders_by_name.get(user.username)
     if folder is None or folder.uid != uid:
         actions.append(CreateFolder(username=user.username, uid=uid))
@@ -173,8 +174,8 @@ def plan_cycle(
         else:
             invalid_uids.add(uid_base + user.id)
             warnings.append(
-                f"user '{user.username}' is not a valid unix account name; "
-                f"skipped (rename the user in paperless to provision it)"
+                f"user '{user.username}' is not a valid unix account name and "
+                f"was skipped. Rename the user in paperless to provision it."
             )
 
     counted = counted_accounts(actual.accounts, uid_base)
@@ -205,7 +206,7 @@ def plan_cycle(
             holder = accounts_by_uid.get(uid)
             if holder is not None and holder.username not in desired_names:
                 # same uid under another name means the paperless user was
-                # renamed; converge without touching data or the password
+                # renamed, so the rename keeps the data and the password
                 workflow = workflows_by_username.get(holder.username)
                 actions.append(
                     RenameUser(
@@ -236,8 +237,9 @@ def plan_cycle(
         # never None, since accounts_by_name holds counted entries alone
         stored_uid = counted_uid(account, uid_base)
         if user.username not in actual.unix_uids and stored_uid is not None:
-            # passdb survived but its unix account did not (container
-            # recreation); rebuild it so smbd can map the NT hash again.
+            # passdb survived a recreation of the container but the unix
+            # account of this entry did not. smbd needs that account to map the
+            # NT hash.
             # create_unix_user is idempotent, so this is safe to re-emit.
             actions.append(RepairUnixAccount(username=user.username, uid=stored_uid))
         missing = _missing_resources(
@@ -245,8 +247,8 @@ def plan_cycle(
         )
         if account.uid != uid:
             warnings.append(
-                f"account '{user.username}' has uid {account.uid}, expected {uid}; "
-                f"left as-is"
+                f"account '{user.username}' has uid {account.uid}, expected {uid}, "
+                f"and was left as it is"
             )
             # the planner cannot tell whose data the folder holds, so a chown
             # would hand it to the paperless user who has the name now
@@ -286,7 +288,7 @@ def plan_cycle(
             warnings.append(
                 f"folder '{folder.name}' has uid {folder.uid} belonging to "
                 f"user '{expected_uid_owner[folder.uid]}' (possibly an "
-                f"interrupted rename); left untouched"
+                f"interrupted rename) and was left untouched"
             )
         elif (
             folder.name not in accounts_by_name

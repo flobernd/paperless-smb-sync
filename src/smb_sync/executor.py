@@ -172,8 +172,8 @@ def _apply(
             if workflow_id is not None:
                 api.update_workflow(workflow_id, user_id, new)
             log.warning(
-                "renamed '%s' to '%s'; update the scanner profile folder path "
-                "manually",
+                "renamed '%s' to '%s'. Update the scanner profile folder path "
+                "manually.",
                 old,
                 new,
             )

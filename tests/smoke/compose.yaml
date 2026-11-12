@@ -7,11 +7,11 @@ services:
     depends_on:
       - redis
     environment:
+      PAPERLESS_ADMIN_PASSWORD: adminpass
+      PAPERLESS_ADMIN_USER: admin
+      PAPERLESS_CONSUMER_RECURSIVE: "1"
       PAPERLESS_REDIS: redis://redis:6379
       PAPERLESS_SECRET_KEY: smoke-test-secret
-      PAPERLESS_ADMIN_USER: admin
-      PAPERLESS_ADMIN_PASSWORD: adminpass
-      PAPERLESS_CONSUMER_RECURSIVE: "1"
       USERMAP_GID: "10000"
     ports:
       - "127.0.0.1:${SMOKE_PORT:-8000}:8000"
@@ -24,8 +24,8 @@ services:
       - paperless
     environment:
       CREDENTIALS_DOCUMENT: ${SMOKE_DOCUMENT:-false}
-      PAPERLESS_URL: http://paperless:8000
       PAPERLESS_API_TOKEN: ${SMOKE_TOKEN:-unset}
+      PAPERLESS_URL: http://paperless:8000
       POLL_INTERVAL: "5"
     volumes:
       - inbox:/shares/inbox

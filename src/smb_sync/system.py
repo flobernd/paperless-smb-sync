@@ -10,8 +10,9 @@ from pathlib import Path
 
 from .model import InboxFolder, SambaAccount
 
-# docker/entrypoint.sh and docker/smb.conf.template hard-code the same path, so
-# all three change together
+# The entrypoint, the share template, the smoke test and the volume mounts of
+# the two compose files use the same path, so they change together with this
+# constant.
 INBOX_ROOT = "/shares/inbox"
 
 _STORED_UID = re.compile(r"smb-sync uid=([0-9]+)")
@@ -197,8 +198,9 @@ class SystemAdapter:
                 # pdbedit opens the file by name while this handle is still open
                 fh.flush()
                 self._run(["pdbedit", "-i", f"smbpasswd:{fh.name}"])
-        # the smbpasswd format has no description field to carry the uid over
-        # it fails if pdbedit -i refused the line with exit 0, so the old entry stays
+        # The smbpasswd format has no description field, so the import loses
+        # the uid. store_uid fails when pdbedit -i refused the line with exit 0,
+        # so the old entry stays.
         self.store_uid(new, uid)
         if old in lines:
             self._run(["pdbedit", "-x", "-u", old])

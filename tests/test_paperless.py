@@ -28,7 +28,7 @@ class BrokenJsonResponse(FakeResponse):
 
 
 class FakeSession:
-    """Route by exact URL; records every write request."""
+    """Routes by exact URL and records every write request."""
 
     def __init__(self, routes, delete_status=204):
         self.routes = routes

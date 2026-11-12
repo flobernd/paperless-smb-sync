@@ -259,8 +259,19 @@ class PaperlessClient:
         response = self._send("GET", path)
         with _unexpected_body(f"GET {path}"):
             present = any(n["note"] == note for n in response.json())
-        if not present:
-            self._send("POST", path, json={"note": note})
+        if present:
+            return
+        response = self._send("POST", path, json={"note": note})
+        # paperless also answers a note that it could not save with 200 and an
+        # error object, and a title set after a lost note ends the retries. A
+        # saved note comes back in the list of the notes of the document.
+        with _unexpected_body(f"POST {path}"):
+            notes = response.json()
+            saved = isinstance(notes, list) and any(n["note"] == note for n in notes)
+        if not saved:
+            raise PaperlessError(
+                f"paperless did not save the note on document {document_id}"
+            )
 
     def delete_credentials(
         self, username: str, user_id: int, document_ids: Sequence[int]

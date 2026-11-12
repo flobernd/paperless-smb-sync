@@ -34,9 +34,10 @@ class BrokenJsonResponse(FakeResponse):
 class FakeSession:
     """Routes by exact URL and records every write request."""
 
-    def __init__(self, routes, delete_status=204):
+    def __init__(self, routes, delete_status=204, writes=None):
         self.routes = routes
         self.delete_status = delete_status
+        self.writes = writes or {}
         self.headers = {}
         self.requests = []
 
@@ -44,6 +45,8 @@ class FakeSession:
         if method == "GET":
             return self.routes[url]
         self.requests.append((method, url, kwargs.get("json")))
+        if (method, url) in self.writes:
+            return self.writes[(method, url)]
         status = {"DELETE": self.delete_status, "POST": 201, "PUT": 200}[method]
         return FakeResponse({}, status)
 
@@ -56,8 +59,8 @@ def page(results, next_url=None):
     return FakeResponse({"results": results, "next": next_url})
 
 
-def make_client(routes):
-    session = FakeSession(routes)
+def make_client(routes, writes=None):
+    session = FakeSession(routes, writes=writes)
     return PaperlessClient(BASE, "tok", CONSUME, session=session), session
 
 
@@ -389,13 +392,35 @@ def test_a_note_goes_only_to_a_document_without_it():
                 [{"id": 1, "note": earlier}, {"id": 2, "note": note}]
             ),
             f"{BASE}/api/documents/41/notes/": FakeResponse([{"id": 3, "note": earlier}]),
-        }
+        },
+        writes={
+            ("POST", f"{BASE}/api/documents/41/notes/"): FakeResponse(
+                [{"id": 3, "note": earlier}, {"id": 4, "note": note}]
+            )
+        },
     )
     client.ensure_document_note(40, note)
     client.ensure_document_note(41, note)
     assert session.requests == [
         ("POST", f"{BASE}/api/documents/41/notes/", {"note": note})
     ]
+
+
+def test_a_note_that_paperless_did_not_save_fails():
+    notes = f"{BASE}/api/documents/41/notes/"
+    client, _ = make_client(
+        {notes: FakeResponse([])},
+        writes={
+            ("POST", notes): FakeResponse(
+                {"error": "Error saving note, check logs for more detail."}
+            )
+        },
+    )
+    with pytest.raises(PaperlessError, match="41"):
+        client.ensure_document_note(
+            41,
+            "The username changed from 'dave' to 'erin'. The password is the same.",
+        )
 
 
 def test_delete_document_also_empties_it_from_the_trash():

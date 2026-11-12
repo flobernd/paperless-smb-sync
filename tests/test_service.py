@@ -1,4 +1,5 @@
 import fcntl
+import logging
 from dataclasses import replace
 
 import pytest
@@ -6,7 +7,7 @@ import pytest
 from smb_sync.config import Config, MailConfig
 from smb_sync.model import PaperlessUser
 from smb_sync.paperless import PaperlessError
-from smb_sync.service import run_cycle, run_cycle_locked, run_daemon
+from smb_sync.service import WarningRepeat, run_cycle, run_cycle_locked, run_daemon
 from smb_sync.system import CommandError
 
 NO_MAIL = MailConfig(
@@ -153,6 +154,44 @@ def test_daemon_survives_cycle_crash(monkeypatch, tmp_path):
         run_daemon(
             CFG, CrashingApi(), FakeSystem(), lock_path=str(tmp_path / "lock")
         )
+
+
+def test_standing_warning_is_due_again_after_the_interval():
+    now = [0.0]
+    repeat = WarningRepeat(interval=3600.0, clock=lambda: now[0])
+    assert repeat.due(["w"]) == ["w"]
+    now[0] = 3599.0
+    assert repeat.due(["w"]) == []
+    now[0] = 3600.0
+    assert repeat.due(["w"]) == ["w"]
+
+
+def test_daemon_logs_a_standing_warning_once(monkeypatch, tmp_path, caplog):
+    cycles = [
+        [PaperlessUser(5, "Bad Name", True)],
+        [PaperlessUser(5, "Bad Name", True), PaperlessUser(6, "Other Bad", True)],
+    ]
+
+    class ChangingApi(FakeApi):
+        def fetch_desired_users(self, group_name):
+            return cycles.pop(0)
+
+    def sleep(_seconds):
+        if not cycles:
+            raise StopLoop()
+
+    monkeypatch.setattr("smb_sync.service.time.sleep", sleep)
+    with caplog.at_level(logging.WARNING), pytest.raises(StopLoop):
+        run_daemon(CFG, ChangingApi(), FakeSystem(), lock_path=str(tmp_path / "lock"))
+    assert caplog.text.count("'Bad Name'") == 1
+    assert caplog.text.count("'Other Bad'") == 1
+
+
+def test_cycle_without_repeat_logs_a_standing_warning(caplog):
+    api = FakeApi(users=[PaperlessUser(5, "Bad Name", True)])
+    with caplog.at_level(logging.WARNING):
+        run_cycle(CFG, api, FakeSystem())
+    assert "'Bad Name'" in caplog.text
 
 
 MAIL_CFG = replace(

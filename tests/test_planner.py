@@ -337,10 +337,11 @@ def test_skipped_inactive_user_has_each_entry_of_its_uid_disabled():
     )
 
 
-def test_rename_with_deactivation_disables_new_name():
+def test_rename_with_deactivation_disables_the_old_name_then_the_new_name():
     desired = [PaperlessUser(5, "dave", False)]
     plan = planned(desired, provisioned_state(username="alice", enabled=True))
     assert plan.actions == (
+        DisableAccount(username="alice"),
         RenameUser(
             old_username="alice",
             new_username="dave",
@@ -409,10 +410,11 @@ def test_missing_unix_account_is_repaired_from_the_stored_uid():
     assert plan.actions == (RepairUnixAccount(username="alice", uid=20005),)
 
 
-def test_rename_with_reactivation_enables_new_name():
+def test_rename_with_reactivation_enables_the_old_name_then_the_new_name():
     desired = [PaperlessUser(5, "dave", True)]
     plan = planned(desired, provisioned_state(username="alice", enabled=False))
     assert plan.actions == (
+        EnableAccount(username="alice"),
         RenameUser(
             old_username="alice",
             new_username="dave",

@@ -237,7 +237,15 @@ def plan_cycle(
             holder = accounts_by_uid.get(uid)
             if holder is not None and holder.username not in desired_names:
                 # same uid under another name means the paperless user was
-                # renamed, so the rename keeps the data and the password
+                # renamed, so the rename keeps the data and the password.
+                # The state change of the old name does not depend on the
+                # rename, so a deactivation closes the login when the rename
+                # fails. The one of the new name sets the state of a copy that
+                # an earlier rename made before it stopped and before the
+                # state changed.
+                actions.extend(
+                    _state_change(holder.username, holder.enabled, user.is_active)
+                )
                 workflow = workflows_by_username.get(holder.username)
                 actions.append(
                     RenameUser(
@@ -249,8 +257,6 @@ def plan_cycle(
                     )
                 )
                 renamed_from.add(holder.username)
-                # the executor renames before the state change, so the
-                # enable/disable action targets the new name
                 actions.extend(
                     _state_change(user.username, holder.enabled, user.is_active)
                 )

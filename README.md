@@ -110,7 +110,9 @@ restore.
 
 A Samba entry without such a uid, or with a uid below `UID_BASE`, is not managed. When no member of the group has its
 name, the daemon leaves it in place with a warning. When a member has its name, the daemon makes the account again with
-a new password.
+a new password, unless the member got the name in a rename. Such a rename stops with an error until the entry is gone,
+since someone else can know the password of the entry. A rename that stops half way leaves a copy of the old entry under
+the new name, with the same password, and the next cycle completes that rename.
 
 ### Deactivation suspends, it does not delete
 

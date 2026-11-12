@@ -83,6 +83,21 @@ logged_block() {
     logs=$(compose logs smb) || return
     grep -q "SMB credentials for '$1'" <<<"$logs"
 }
+logged_line() {
+    local logs
+    logs=$(compose logs smb) || return
+    grep -qF -- "$1" <<<"$logs"
+}
+stores_uid() {
+    local entry
+    entry=$(compose exec -T smb pdbedit -v -u "$1" 2>/dev/null) || return
+    grep -Eq "^Account desc: +smb-sync uid=$2\$" <<<"$entry"
+}
+smb_login() {
+    # shellcheck disable=SC2016 # the variables expand in the shell of the container
+    compose exec -T -e SMBLOGIN="$1" -e SMBPASS="$2" smb \
+        sh -c 'smbclient //localhost/inbox -U "$SMBLOGIN%$SMBPASS" -c ls' >/dev/null
+}
 sees_document() {
     local documents
     documents=$(with_token "$1" -G --data-urlencode "title__iexact=$2" \
@@ -319,9 +334,24 @@ if compose exec -T smb test -e /shares/inbox/carol; then fail "folder not remove
 WORKFLOWS=$(api "$API/api/workflows/" | jq -r '.results[].name') || fail "could not list workflows"
 if grep -qx '\[smb-sync\] carol' <<<"$WORKFLOWS"; then fail "workflow not removed"; fi
 
-echo "== asserting a login after a recreation without paperless =="
+echo "== asserting a refused rename to the name of a samba entry made by hand =="
+# an entry that no member has and whose unix account is gone, as after a
+# recreation of the container
+compose exec -T smb sh -c 'useradd --no-create-home erin &&
+    printf "hand-pass\nhand-pass\n" | smbpasswd -s -a erin >/dev/null && userdel erin' \
+    || fail "could not make the samba entry of erin by hand"
 api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"username":"erin"}' >/dev/null
+wait_for "the rename of dave to erin was not refused" \
+    logged_line "an entry 'erin' exists that is not its copy"
+# the smoke compose file keeps the default UID_BASE of 20000
+stores_uid dave "$((20000 + DAVE_ID))" || fail "the entry of dave lost its uid"
+compose exec -T smb test -d /shares/inbox/dave || fail "the folder of dave was renamed"
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in after the refused rename"
+compose exec -T smb pdbedit -x -u erin >/dev/null || fail "could not remove the entry of erin"
 wait_for "samba account of dave was not renamed to erin" account_renamed dave erin
+smb_login erin "$DAVE_PASSWORD" || fail "erin could not log in with the password of dave"
+
+echo "== asserting a login after a recreation without paperless =="
 compose stop paperless
 compose up -d --force-recreate --no-deps smb
 # shellcheck disable=SC2016 # $SMBPASS expands in the shell of the container

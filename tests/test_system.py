@@ -191,25 +191,32 @@ def test_rename_samba_account_skips_usermod_when_new_unix_exists(
     assert run.calls[-1][0] == ("pdbedit", "-x", "-u", "alice")
 
 
-def test_rename_stores_the_uid_when_only_the_new_entry_is_listed(
-    tmp_path, monkeypatch
-):
+def test_rename_refuses_a_new_entry_without_the_old_one(tmp_path, monkeypatch):
     unix_users(monkeypatch, dave=20005)
     line = "dave:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
     adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): line})
-    adapter.rename_samba_account("alice", "dave", 20005)
-    assert [c[0] for c in run.calls] == [
-        ("pdbedit", "-L", "-w"),
-        ("pdbedit", "-r", "-u", "dave", "-N", "smb-sync uid=20005"),
-    ]
+    with pytest.raises(CommandError, match="not found"):
+        adapter.rename_samba_account("alice", "dave", 20005)
+    assert [c[0] for c in run.calls] == [("pdbedit", "-L", "-w")]
 
 
-def test_rename_with_both_entries_moves_the_unix_account_before_it_deletes(
-    tmp_path, monkeypatch
-):
+def test_rename_refuses_a_new_entry_with_another_password(tmp_path, monkeypatch):
     unix_users(monkeypatch, alice=20005)
     lines = (
         "alice:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
+        "dave:4294967295:AAAA:CCCC:[U          ]:LCT-68C3A123:\n"
+    )
+    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): lines})
+    with pytest.raises(CommandError, match="not its copy"):
+        adapter.rename_samba_account("alice", "dave", 20005)
+    assert [c[0] for c in run.calls] == [("pdbedit", "-L", "-w")]
+
+
+def test_rename_resumes_with_a_copy_whose_flags_differ(tmp_path, monkeypatch):
+    # the old entry was disabled after the import made the copy
+    unix_users(monkeypatch, alice=20005)
+    lines = (
+        "alice:20005:AAAA:BBBB:[DU         ]:LCT-68C3A123:\n"
         "dave:4294967295:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
     )
     adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): lines})

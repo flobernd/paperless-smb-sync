@@ -163,9 +163,12 @@ def _apply(
             user_id=user_id,
             workflow_id=workflow_id,
         ):
+            # The check comes before anything moves, so a refused rename
+            # leaves the folder under the old name together with the login.
             # The folder moves first. Once the entry has the new name, the
             # planner sees no open rename and gives the user a new empty folder
             # beside the old one.
+            system.check_samba_rename(old, new)
             system.rename_inbox_folder(old, new)
             system.rename_samba_account(old, new, uid)
             if workflow_id is not None:

@@ -43,6 +43,27 @@ def _stored_uid(description: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def _hashes(line: str) -> list[str]:
+    # the LM and the NT hash field of a line of pdbedit -L -w
+    return line.split(":")[2:4]
+
+
+def _check_rename(lines: dict[str, str], old: str, new: str) -> None:
+    # Without the old entry nothing proves that an entry with the new name is
+    # its copy. An entry of another origin has a password that someone else
+    # knows, and the rename would give that password the folder of the user.
+    # The flags are not compared, since the old entry of an inactive user is
+    # disabled ahead of a rename that resumes.
+    if old not in lines:
+        raise CommandError(f"samba account '{old}' not found")
+    if new in lines and _hashes(lines[new]) != _hashes(lines[old]):
+        raise CommandError(
+            f"cannot rename samba account '{old}' to '{new}': an entry '{new}' "
+            f"exists that is not its copy. Remove that entry or give the user "
+            f"another name."
+        )
+
+
 def _run(argv: list[str], input_text: str | None = None) -> str:
     result = subprocess.run(argv, input=input_text, capture_output=True, text=True)
     if result.returncode != 0:
@@ -161,6 +182,18 @@ class SystemAdapter:
     def store_uid(self, username: str, uid: int) -> None:
         self._run(["pdbedit", "-r", "-u", username, "-N", f"{_UID_MARK}{uid}"])
 
+    def _hash_lines(self) -> dict[str, str]:
+        # the full listing, because one call shows both names of a rename
+        output = self._run(["pdbedit", "-L", "-w"])
+        return {
+            line.split(":", 1)[0]: line
+            for line in output.splitlines()
+            if ":" in line
+        }
+
+    def check_samba_rename(self, old: str, new: str) -> None:
+        _check_rename(self._hash_lines(), old, new)
+
     def rename_samba_account(self, old: str, new: str, uid: int) -> None:
         # tdbsam cannot rename in place, so the hash line is re-imported
         # under the new name. Each step either checks whether an earlier call
@@ -172,16 +205,10 @@ class SystemAdapter:
         # The old entry goes last: until the new entry stores the uid, the old
         # one is how the planner finds the open rename, and without it the
         # next cycle creates the account again with a new password.
-        # The hash line comes from the full listing because one call shows
-        # both names.
-        output = self._run(["pdbedit", "-L", "-w"])
-        lines = {
-            line.split(":", 1)[0]: line
-            for line in output.splitlines()
-            if ":" in line
-        }
-        if old not in lines and new not in lines:
-            raise CommandError(f"samba account '{old}' not found")
+        lines = self._hash_lines()
+        # the same check as check_samba_rename, so that a call of this method
+        # alone cannot take over an entry of another origin
+        _check_rename(lines, old, new)
         if _unix_user(new) is None:
             if _unix_user(old) is not None:
                 self._run(["usermod", "--login", new, old])
@@ -202,8 +229,7 @@ class SystemAdapter:
         # the uid. store_uid fails when pdbedit -i refused the line with exit 0,
         # so the old entry stays.
         self.store_uid(new, uid)
-        if old in lines:
-            self._run(["pdbedit", "-x", "-u", old])
+        self._run(["pdbedit", "-x", "-u", old])
 
     # -- inbox folders -----------------------------------------------
 

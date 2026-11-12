@@ -47,6 +47,9 @@ class FakeSystem:
     def enable_samba_account(self, username):
         self._record("enable_samba_account", username)
 
+    def check_samba_rename(self, old, new):
+        self._record("check_samba_rename", old, new)
+
     def rename_samba_account(self, old, new, uid):
         self._record("rename_samba_account", old, new, uid)
 
@@ -235,10 +238,29 @@ def test_rename_sequence_and_workflow_update():
     )
     assert failures == 0
     assert system.calls == [
+        ("check_samba_rename", "alice", "dave"),
         ("rename_inbox_folder", "alice", "dave"),
         ("rename_samba_account", "alice", "dave", 20005),
     ]
     assert api.calls == [("update_workflow", 7, 5, "dave")]
+
+
+def test_a_refused_rename_moves_no_folder():
+    failures, system, api = run(
+        [
+            RenameUser(
+                old_username="alice",
+                new_username="dave",
+                uid=20005,
+                user_id=5,
+                workflow_id=7,
+            )
+        ],
+        system=FakeSystem(fail_on="check_samba_rename"),
+    )
+    assert failures == 1
+    assert system.calls == []
+    assert api.calls == []
 
 
 def test_rename_without_workflow_skips_api():

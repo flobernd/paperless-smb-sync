@@ -67,8 +67,9 @@ official paperless-ngx image, `USERMAP_GID` sets it.
 The daemon generates a random 20-character password of letters and digits when it creates a Samba account and prints it
 to the container log exactly once, in a block with the server, share path, username, and password ready to copy into a
 scanner profile. Samba's own `passdb.tdb` stores the hashed credential, and the password cannot be retrieved from it in
-plaintext afterward. Unless the credentials document below is enabled, no other copy exists. If a password is lost,
-generate a new one with `smb-sync regen <username>` (see Admin commands below).
+plaintext afterward. Unless the credentials document below is enabled, no other copy exists. A container that stops
+after the daemon made an account and before it printed the block leaves a password that nobody received. In that case,
+or when a password is lost, generate a new one with `smb-sync regen <username>` (see Admin commands below).
 
 ### Credentials can go to the user as a document
 

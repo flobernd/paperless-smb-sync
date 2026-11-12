@@ -65,8 +65,8 @@ def _announce_credentials(
         api.upload_credentials(user.id, user.username, block)
         log.info("uploaded the credentials document of '%s'", user.username)
     except PaperlessError as exc:
-        # the password is already set and the block is in the log, so a failed
-        # upload must not keep the creation from finishing
+        # the account is complete and the block is in the log, so a failed
+        # upload does not fail the creation
         log.error(
             "could not upload the credentials document of '%s': %s", user.username, exc
         )
@@ -83,11 +83,13 @@ def _apply(
             system.create_unix_user(user.username, uid)
             password = generate_password()
             system.set_samba_password(user.username, password, create=True)
+            # An entry without the mark is one that the daemon does not
+            # manage, so no person gets a password for it. A stop between the
+            # mark and the output leaves an account with a password that
+            # nobody received, and `smb-sync regen` makes a new one.
+            system.store_uid(user.username, uid)
             log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
             announce(user, password, upload)
-            # the stored uid marks the creation as finished, so it waits until
-            # the password went out
-            system.store_uid(user.username, uid)
         case RepairUnixAccount(username=username, uid=uid):
             system.create_unix_user(username, uid)
             log.warning(

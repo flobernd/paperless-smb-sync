@@ -39,8 +39,8 @@ _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
 def counted_uid(account: SambaAccount, uid_base: int) -> int | None:
-    # the uid goes into an entry last in a creation, so an entry without one
-    # is either unfinished or not the daemon's
+    # a creation stores the uid right after the password, so an entry without
+    # one is either unfinished or not the daemon's
     if account.uid is not None and account.uid >= uid_base:
         return account.uid
     return None

@@ -115,15 +115,16 @@ def test_create_account_sets_password_and_prints_once(capsys):
     assert system.calls[-1] == ("store_uid", "alice", 20005)
 
 
-def test_creation_stores_the_uid_only_after_the_credentials_went_out(monkeypatch):
-    def broken_block(*args, **kwargs):
-        raise RuntimeError("no block")
-
-    monkeypatch.setattr("smb_sync.executor.credentials_block", broken_block)
+def test_a_creation_whose_uid_write_fails_hands_out_no_password(capsys):
     user = PaperlessUser(5, "alice", True)
-    failures, system, _ = run([CreateAccount(user=user, uid=20005, upload=False)])
+    failures, system, api = run(
+        [CreateAccount(user=user, uid=20005, upload=True)],
+        system=FakeSystem(fail_on="store_uid"),
+    )
     assert failures == 1
-    assert all(call[0] != "store_uid" for call in system.calls)
+    _, _, password, _ = system.calls[1]
+    assert password not in capsys.readouterr().out
+    assert api.calls == []
 
 
 def test_folder_workflow_and_state_actions():

@@ -64,6 +64,17 @@ def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
     return []
 
 
+def _skipped_state_change(
+    user: PaperlessUser, uid: int, accounts_by_uid: Mapping[int, ManagedAccount]
+) -> list[Action]:
+    # A user that the planner skips can still hold a login under an earlier
+    # name, and a deactivation has to close it.
+    holder = accounts_by_uid.get(uid)
+    if holder is None:
+        return []
+    return _state_change(holder.username, holder.enabled, user.is_active)
+
+
 def _missing_folder(
     user: PaperlessUser, uid: int, folders_by_name: Mapping[str, InboxFolder]
 ) -> list[Action]:
@@ -173,6 +184,10 @@ def plan_cycle(
     actions: list[Action] = []
     warnings: list[str] = []
 
+    counted = counted_accounts(actual.accounts, uid_base)
+    accounts_by_name = {a.username: a for a in counted}
+    accounts_by_uid = {a.uid: a for a in counted}
+
     valid: list[PaperlessUser] = []
     # uids of skipped users still protect their resources: a rename to an
     # invalid name must not tear down what the old name provisioned
@@ -186,10 +201,10 @@ def plan_cycle(
                 f"user '{user.username}' is not a valid unix account name and "
                 f"was skipped. Rename the user in paperless to provision it."
             )
+            actions.extend(
+                _skipped_state_change(user, uid_base + user.id, accounts_by_uid)
+            )
 
-    counted = counted_accounts(actual.accounts, uid_base)
-    accounts_by_name = {a.username: a for a in counted}
-    accounts_by_uid = {a.uid: a for a in counted}
     folders_by_name = {f.name: f for f in actual.folders}
     workflows_by_username = {w.username: w for w in actual.workflows}
     desired_names = {u.username for u in valid}
@@ -215,6 +230,7 @@ def plan_cycle(
                     f"(uid {taken_uid}) and was skipped. Rename the user in "
                     f"paperless to provision it."
                 )
+                actions.extend(_skipped_state_change(user, uid, accounts_by_uid))
                 continue
             holder = accounts_by_uid.get(uid)
             if holder is not None and holder.username not in desired_names:
@@ -252,18 +268,22 @@ def plan_cycle(
             # NT hash.
             # create_unix_user is idempotent, so this is safe to re-emit.
             actions.append(RepairUnixAccount(username=user.username, uid=account.uid))
-        missing = _missing_workflow(user, workflows_by_username, consume_path)
         if account.uid != uid:
-            # the planner cannot tell whose data the folder holds, so a chown
-            # would hand it to the paperless user who has the name now
+            # The entry can be the account of a former holder of the name. A
+            # chown would give the folder of that holder to the new user, an
+            # enable would open the old login again, and a workflow for the new
+            # user would give that user the scans of the old login.
             warnings.append(
-                f"account '{user.username}' has uid {account.uid}, expected {uid}, "
-                f"and was left as it is"
+                f"account '{user.username}' stores uid {account.uid}, but the "
+                f"paperless user of that name maps to uid {uid}. The daemon "
+                f"changes nothing for this name. If another user had the name "
+                f"before, take the user out of the sync group until the old "
+                f"account is gone, then add the user again."
             )
-        else:
-            missing = _missing_folder(user, uid, folders_by_name) + missing
+            continue
         actions.extend(_state_change(user.username, account.enabled, user.is_active))
-        actions.extend(missing)
+        actions.extend(_missing_folder(user, uid, folders_by_name))
+        actions.extend(_missing_workflow(user, workflows_by_username, consume_path))
 
     claimed_names = desired_names | renamed_from
     protected_names = {a.username for a in counted if a.uid in invalid_uids}
@@ -349,12 +369,14 @@ def plan_cycle(
             )
         )
 
-    # stray managed workflows only stop intake, so removing them all at once
-    # is safe even when the matching account removal is deferred
+    # paperless imports a scan with or without a workflow, and the workflow
+    # only sets the owner. So the workflow of an account that waits for its
+    # removal goes inside that removal, after the login closed, and a scan
+    # that arrives while the login is still open still gets its owner.
     for workflow in actual.workflows:
         if (
             workflow.username not in claimed_names
-            and workflow.username not in deprovisioned
+            and workflow.username not in stale_accounts
             and workflow.username not in protected_names
         ):
             actions.append(DeleteWorkflow(workflow_id=workflow.id))

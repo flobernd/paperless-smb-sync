@@ -124,8 +124,9 @@ deactivate the paperless user instead of removing them from the group.
 
 The daemon deletes an inbox folder only together with the Samba account of its user, and only when the owner of the
 folder is the uid that the entry stores. A folder with no account stays in place, with a warning. One account goes per
-cycle, and the others wait for later cycles. A removal closes the login first. The Samba entry goes after the workflow,
-the credentials document, and the folder, so a removal that fails before that step continues in a later cycle. The unix
+cycle, and the others wait for later cycles. The workflow of an account goes with the account, so a scan that reaches a
+waiting login still gets its owner. A removal closes the login first. The Samba entry goes after the workflow, the
+credentials document, and the folder, so a removal that fails before that step continues in a later cycle. The unix
 account goes last.
 
 ### Username requirements
@@ -135,6 +136,11 @@ underscores, and hyphens, starting with a letter or underscore, at most 32 chara
 member whose name is the name of a system account of the container, such as `mail` or `nobody`, is skipped as well. A
 skipped user gets a logged warning and is not partially provisioned. Renaming the user in paperless to a valid name
 resolves it on the next cycle.
+
+A member can have the name of an account that stores the uid of another paperless user, for example when an
+administrator deletes a user and creates a new one with the same name before the daemon removed the old account. The
+daemon then changes nothing for that name and logs a warning. To give the name to the new user, take the user out of the
+sync group until the old account is gone, then add the user again.
 
 ### Renames
 
@@ -159,7 +165,7 @@ All configuration is via environment variables, read in `src/smb_sync/config.py`
 | `SHARE_NAME` | `inbox` | Name of the exported SMB share. |
 | `SMB_HOST` | empty | Hostname or IP shown in the credentials block (provisioning log, `smb-sync regen` output, and credentials document). It is for display only and does not affect how the share is served. |
 | `SYNC_GROUP` | `smb` | Paperless group whose members are provisioned. |
-| `UID_BASE` | `20000` | Base for the unix UID of managed accounts. A user's UID is `UID_BASE` plus their paperless user id. |
+| `UID_BASE` | `20000` | Base for the unix UID of managed accounts. A user's UID is `UID_BASE` plus their paperless user id. Keep it after the first start. A higher value makes each existing entry below it unmanaged, so the daemon makes the account of each member again with a new password and leaves the other entries in place with a warning. With a lower value the stored uids no longer match, so the daemon changes nothing for the account of a member and logs a warning. |
 
 The API token needs permission to read users and groups and to read, create, update, and delete workflows. Only the
 credentials document needs the token of a superuser, though a superuser's token is the simplest choice either way.

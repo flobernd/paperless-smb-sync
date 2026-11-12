@@ -1,5 +1,7 @@
 from dataclasses import replace
 
+import pytest
+
 from smb_sync.model import (
     ActualState,
     CreateAccount,
@@ -172,8 +174,13 @@ def test_at_most_one_deprovision_per_cycle():
         Deprovision(username="alice", workflow_id=7, delete_folder=True, documents=None)
     ]
     assert any("bob" in w and "deferred" in w for w in plan.warnings)
-    # bob's workflow removal is non-destructive and not deferred
-    assert DeleteWorkflow(workflow_id=8) in plan.actions
+    # the workflow of bob goes with his account, after his login closed
+    assert not any(isinstance(a, DeleteWorkflow) for a in plan.actions)
+
+
+def test_workflow_without_account_and_user_is_deleted():
+    actual = state(workflows=(workflow(8, "ghost"),))
+    assert planned([], actual).actions == (DeleteWorkflow(workflow_id=8),)
 
 
 def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
@@ -254,6 +261,20 @@ def test_uid_mismatch_warned_not_touched():
     assert any("uid" in w.lower() for w in plan.warnings)
 
 
+def test_account_with_another_stored_uid_gets_no_action():
+    # user 5 held the name alice, and a stopped removal disabled the entry
+    desired = [PaperlessUser(9, "alice", True)]
+    actual = state(
+        accounts=(SambaAccount("alice", 20005, False),),
+        folders=(InboxFolder("alice", 20005),),
+        unix_uids={"alice": 20005},
+    )
+    plan = planned(desired, actual)
+    assert plan.actions == ()
+    (warning,) = plan.warnings
+    assert "20005" in warning and "20009" in warning
+
+
 def test_invalid_rename_preserves_existing_resources():
     desired = [PaperlessUser(5, "alice@example.com", True)]
     plan = planned(desired, provisioned_state())
@@ -285,6 +306,19 @@ def test_rename_to_the_name_of_another_unix_account_changes_nothing():
     )
     plan = planned(desired, actual)
     assert plan.actions == ()
+
+
+@pytest.mark.parametrize(
+    ("username", "unix_uids"),
+    [
+        ("Bad Name", {"alice": 20005}),
+        ("mail", {"alice": 20005, "mail": 8}),
+    ],
+)
+def test_skipped_inactive_user_has_the_entry_of_its_uid_disabled(username, unix_uids):
+    desired = [PaperlessUser(5, username, False)]
+    actual = replace(provisioned_state(), unix_uids=unix_uids)
+    assert planned(desired, actual).actions == (DisableAccount(username="alice"),)
 
 
 def test_rename_with_deactivation_disables_new_name():

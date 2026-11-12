@@ -50,6 +50,9 @@ class FakeSystem:
     def rename_samba_account(self, old, new, uid):
         self._record("rename_samba_account", old, new, uid)
 
+    def store_uid(self, username, uid):
+        self._record("store_uid", username, uid)
+
     def create_inbox_folder(self, username, uid):
         self._record("create_inbox_folder", username, uid)
 
@@ -110,6 +113,18 @@ def test_create_account_sets_password_and_prints_once(capsys):
     assert "SMB credentials for 'alice'" in out
     assert password in out
     assert "\\\\nas.lan\\inbox" in out
+    assert system.calls[-1] == ("store_uid", "alice", 20005)
+
+
+def test_creation_stores_the_uid_only_after_the_credentials_went_out(monkeypatch):
+    def broken_block(*args, **kwargs):
+        raise RuntimeError("no block")
+
+    monkeypatch.setattr("smb_sync.executor.credentials_block", broken_block)
+    user = PaperlessUser(5, "alice", True)
+    failures, system, _ = run([CreateAccount(user=user, uid=20005)])
+    assert failures == 1
+    assert all(call[0] != "store_uid" for call in system.calls)
 
 
 def test_folder_workflow_and_state_actions():
@@ -223,6 +238,7 @@ def test_a_failed_mail_does_not_fail_provisioning(caplog):
     assert [call[0] for call in system.calls] == [
         "create_unix_user",
         "set_samba_password",
+        "store_uid",
     ]
     assert "smtp down" in caplog.text
 

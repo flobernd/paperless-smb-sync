@@ -6,7 +6,7 @@ from functools import partial
 from .config import Config, config_warnings, load_config
 from .credentials import credentials_block, generate_password
 from .mail import deliver_credentials, send_credentials
-from .model import UNMAPPED_UID, ActualState, PaperlessUser
+from .model import ActualState, PaperlessUser
 from .paperless import PaperlessClient, PaperlessError
 from .service import run_cycle_locked, run_daemon
 from .system import INBOX_ROOT, SystemAdapter
@@ -37,10 +37,10 @@ def format_status(
     workflows = {w.username for w in actual.workflows}
     desired_names = {u.username for u in desired}
 
-    def status_row(username: str, uid: int, samba: str) -> tuple[str, ...]:
+    def status_row(username: str, uid: int | None, samba: str) -> tuple[str, ...]:
         return (
             username,
-            str(uid),
+            "-" if uid is None else str(uid),
             samba,
             "yes" if username in folders else "no",
             "yes" if username in workflows else "no",
@@ -57,14 +57,17 @@ def format_status(
             samba = "disabled"
         rows.append(status_row(user.username, uid_base + user.id, samba))
     for account in sorted(actual.accounts, key=lambda a: a.username):
-        if account.uid >= uid_base and account.username not in desired_names:
-            # a sentinel-uid account matching no desired user is excluded from
-            # the planner's stale set, so it is never removed automatically
-            if account.uid == UNMAPPED_UID:
-                samba = "stranded, needs manual cleanup"
-            else:
-                samba = "pending removal"
-            rows.append(status_row(account.username, account.uid, samba))
+        if account.username in desired_names:
+            continue
+        # the planner leaves an entry that stores no uid untouched, so it must
+        # not read as pending removal
+        if account.uid is None:
+            samba = "stranded, needs manual cleanup"
+        elif account.uid >= uid_base:
+            samba = "pending removal"
+        else:
+            continue
+        rows.append(status_row(account.username, account.uid, samba))
 
     widths = [max(map(len, column)) for column in zip(*rows)]
     return "\n".join(
@@ -91,17 +94,17 @@ def regen_password(
         (a for a in system.list_samba_accounts() if a.username == username),
         None,
     )
-    if account is None or account.uid < cfg.uid_base:
-        print(f"no managed samba account '{username}'", file=sys.stderr)
-        return 1
-    if account.uid == UNMAPPED_UID:
-        # smbpasswd would fail obscurely: the unix account is gone, so run a
-        # sync cycle to repair it (or clean it up manually) before regenerating
+    if account is not None and account.uid is None:
         print(
-            f"samba account '{username}' is stranded (no unix account); "
-            f"cannot regenerate password",
+            f"samba entry '{username}' stores no uid of the managed range, so "
+            f"smb-sync does not manage it. If '{username}' is a member of the "
+            f"sync group, the next cycle or 'smb-sync sync' makes the account "
+            f"again and prints new credentials.",
             file=sys.stderr,
         )
+        return 1
+    if account is None or account.uid < cfg.uid_base:
+        print(f"no managed samba account '{username}'", file=sys.stderr)
         return 1
     password = generate_password()
     system.set_samba_password(username, password, create=False)
@@ -150,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             accounts=tuple(system.list_samba_accounts()),
             folders=tuple(system.list_inbox_folders()),
             workflows=tuple(api.fetch_managed_workflows()),
+            unix_uids=system.list_unix_uids(),
         )
         print(format_status(desired, actual, cfg.uid_base))
         return 0

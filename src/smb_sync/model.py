@@ -1,8 +1,5 @@
-from dataclasses import dataclass
-
-# (uid_t)-1: pdbedit reports this uid for a passdb entry whose unix account is
-# missing, e.g. after container recreation wipes the ephemeral /etc/passwd.
-UNMAPPED_UID = 4294967295
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -16,7 +13,7 @@ class PaperlessUser:
 @dataclass(frozen=True)
 class SambaAccount:
     username: str
-    uid: int
+    uid: int | None
     enabled: bool
 
 
@@ -37,6 +34,7 @@ class ActualState:
     accounts: tuple[SambaAccount, ...]
     folders: tuple[InboxFolder, ...]
     workflows: tuple[ManagedWorkflow, ...]
+    unix_uids: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

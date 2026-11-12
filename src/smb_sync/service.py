@@ -29,6 +29,7 @@ def run_cycle(cfg: Config, api: PaperlessClient, system: SystemAdapter) -> bool:
             accounts=tuple(system.list_samba_accounts()),
             folders=tuple(system.list_inbox_folders()),
             workflows=tuple(workflows),
+            unix_uids=system.list_unix_uids(),
         )
     except (CommandError, OSError) as exc:
         log.error("failed to read local state, skipping cycle: %s", exc)

@@ -1,5 +1,6 @@
 import os
 import pwd
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,8 @@ from .model import InboxFolder, SambaAccount
 # docker/entrypoint.sh and docker/smb.conf.template hard-code the same path, so
 # all three change together
 INBOX_ROOT = "/shares/inbox"
+
+_STORED_UID = re.compile(r"smb-sync uid=([0-9]+)")
 
 
 class CommandError(Exception):
@@ -31,6 +34,11 @@ def _unix_user(username: str) -> pwd.struct_passwd | None:
         return pwd.getpwnam(username)
     except KeyError:
         return None
+
+
+def _stored_uid(description: str) -> int | None:
+    match = _STORED_UID.fullmatch(description)
+    return int(match.group(1)) if match else None
 
 
 def _run(argv: list[str], input_text: str | None = None) -> str:
@@ -57,20 +65,30 @@ class SystemAdapter:
     # -- observation -------------------------------------------------
 
     def list_samba_accounts(self) -> list[SambaAccount]:
-        output = self._run(["pdbedit", "-L", "-w"])
-        accounts = []
+        # pdbedit takes the uid of an entry from its unix account, which a
+        # recreated container lacks, so the entry keeps its uid in the
+        # description field. A share user cannot change that field.
+        output = self._run(["pdbedit", "-L", "-v"])
+        entries: list[dict[str, str]] = []
         for line in output.splitlines():
-            parts = line.split(":")
-            if len(parts) < 5:
+            key, colon, value = line.partition(":")
+            if not colon:
                 continue
-            try:
-                uid = int(parts[1])
-            except ValueError:
-                continue
-            accounts.append(
-                SambaAccount(username=parts[0], uid=uid, enabled="D" not in parts[4])
+            if key == "Unix username":
+                entries.append({})
+            if entries:
+                entries[-1][key] = value.strip()
+        return [
+            SambaAccount(
+                username=entry["Unix username"],
+                uid=_stored_uid(entry.get("Account desc", "")),
+                enabled="D" not in entry.get("Account Flags", ""),
             )
-        return accounts
+            for entry in entries
+        ]
+
+    def list_unix_uids(self) -> dict[str, int]:
+        return {entry.pw_name: entry.pw_uid for entry in pwd.getpwall()}
 
     def list_inbox_folders(self) -> list[InboxFolder]:
         folders = []
@@ -137,6 +155,9 @@ class SystemAdapter:
     def enable_samba_account(self, username: str) -> None:
         self._run(["smbpasswd", "-e", username])
 
+    def store_uid(self, username: str, uid: int) -> None:
+        self._run(["pdbedit", "-r", "-u", username, "-N", f"smb-sync uid={uid}"])
+
     def rename_samba_account(self, old: str, new: str, uid: int) -> None:
         # tdbsam cannot rename in place, so the hash line is re-imported
         # under the new name and the old entry is deleted only after the
@@ -171,6 +192,8 @@ class SystemAdapter:
             # pdbedit opens the file by name while this handle is still open
             fh.flush()
             self._run(["pdbedit", "-i", f"smbpasswd:{fh.name}"])
+        # the smbpasswd format has no description field to carry the uid over
+        self.store_uid(new, uid)
         self._run(["pdbedit", "-x", "-u", old])
 
     # -- inbox folders -----------------------------------------------

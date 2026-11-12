@@ -2,7 +2,6 @@ import re
 from collections.abc import Mapping
 
 from .model import (
-    UNMAPPED_UID,
     Action,
     ActualState,
     CreateAccount,
@@ -70,8 +69,13 @@ def plan_cycle(
                 f"skipped (rename the user in paperless to provision it)"
             )
 
-    accounts_by_name = {a.username: a for a in actual.accounts}
-    accounts_by_uid = {a.uid: a for a in actual.accounts}
+    # the uid goes into an entry last in a creation, so an entry without one
+    # is either unfinished or not the daemon's
+    counted = tuple(
+        a for a in actual.accounts if a.uid is not None and a.uid >= uid_base
+    )
+    accounts_by_name = {a.username: a for a in counted}
+    accounts_by_uid = {a.uid: a for a in counted}
     folders_by_name = {f.name: f for f in actual.folders}
     workflows_by_username = {w.username: w for w in actual.workflows}
     desired_names = {u.username for u in valid}
@@ -112,12 +116,14 @@ def plan_cycle(
             actions.extend(_state_change(user.username, True, user.is_active))
             continue
 
-        if account.uid == UNMAPPED_UID:
+        if user.username not in actual.unix_uids:
             # passdb survived but its unix account did not (container
             # recreation); rebuild it so smbd can map the NT hash again.
             # create_unix_user is idempotent, so this is safe to re-emit.
-            actions.append(RepairUnixAccount(username=user.username, uid=uid))
-        elif account.uid != uid:
+            actions.append(
+                RepairUnixAccount(username=user.username, uid=account.uid)
+            )
+        if account.uid != uid:
             warnings.append(
                 f"account '{user.username}' has uid {account.uid}, expected {uid}; "
                 f"left as-is"
@@ -128,16 +134,13 @@ def plan_cycle(
         )
 
     claimed_names = desired_names | renamed_from
-    protected_names = {a.username for a in actual.accounts if a.uid in invalid_uids}
+    protected_names = {a.username for a in counted if a.uid in invalid_uids}
 
-    # an unmapped uid means the unix account is gone, likely a rename that
-    # crashed halfway; the passdb entry holds the only copy of the NT hash,
-    # so deprovisioning it would make the rename unrecoverable
     for account in actual.accounts:
-        if account.uid == UNMAPPED_UID and account.username not in claimed_names:
+        if account not in counted and account.username not in desired_names:
             warnings.append(
-                f"samba account '{account.username}' has no unix account "
-                f"(possibly an interrupted rename); left untouched"
+                f"samba entry '{account.username}' stores no uid of the managed "
+                f"range and was left untouched"
             )
 
     # a folder carrying the uid a desired user maps to still holds that
@@ -154,11 +157,8 @@ def plan_cycle(
 
     stale_accounts = {
         a.username
-        for a in actual.accounts
-        if a.uid >= uid_base
-        and a.uid != UNMAPPED_UID
-        and a.uid not in invalid_uids
-        and a.username not in claimed_names
+        for a in counted
+        if a.uid not in invalid_uids and a.username not in claimed_names
     }
     stale_folders = {
         f.name

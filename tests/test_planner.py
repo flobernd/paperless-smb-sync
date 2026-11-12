@@ -1,5 +1,4 @@
 from smb_sync.model import (
-    UNMAPPED_UID,
     ActualState,
     CreateAccount,
     CreateFolder,
@@ -30,6 +29,7 @@ def provisioned_state(username="alice", user_id=5, enabled=True, workflow_id=7):
         accounts=(SambaAccount(username, UID_BASE + user_id, enabled),),
         folders=(InboxFolder(username, UID_BASE + user_id),),
         workflows=(ManagedWorkflow(workflow_id, username),),
+        unix_uids={username: UID_BASE + user_id},
     )
 
 
@@ -64,6 +64,7 @@ def test_missing_folder_and_workflow_repaired():
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(),
         workflows=(),
+        unix_uids={"alice": 20005},
     )
     plan = plan_cycle(desired, actual, UID_BASE)
     assert plan.actions == (
@@ -80,6 +81,7 @@ def test_existing_folder_wrong_uid_is_adopted():
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 1000),),
         workflows=(ManagedWorkflow(7, "alice"),),
+        unix_uids={"alice": 20005},
     )
     plan = plan_cycle(desired, actual, UID_BASE)
     assert plan.actions == (CreateFolder(username="alice", uid=20005),)
@@ -201,20 +203,6 @@ def test_rename_with_deactivation_disables_new_name():
     )
 
 
-def test_unmapped_uid_account_frozen_with_warning():
-    # pdbedit reports (uid_t)-1 for entries whose unix account is gone,
-    # e.g. after an interrupted rename; deleting it would destroy the
-    # only remaining copy of the NT hash
-    actual = ActualState(
-        accounts=(SambaAccount("alice", 4294967295, True),),
-        folders=(),
-        workflows=(),
-    )
-    plan = plan_cycle([], actual, UID_BASE)
-    assert plan.actions == ()
-    assert any("alice" in w and "rename" in w for w in plan.warnings)
-
-
 def test_stale_folder_with_desired_uid_frozen_with_warning():
     # in a half-completed rename the old folder still carries the real
     # uid of a desired user; deleting it would destroy that user's data
@@ -227,18 +215,48 @@ def test_stale_folder_with_desired_uid_frozen_with_warning():
     assert any("alice" in w and "dave" in w for w in plan.warnings)
 
 
-def test_unmapped_uid_account_matching_user_is_repaired():
-    # container recreation wiped /etc/passwd but passdb.tdb survived; the
-    # unix account must be rebuilt so smbd can map the NT hash again
+def test_stored_uid_below_the_range_does_not_count():
+    # 19999 is the last uid outside the range, 20000 the first inside
+    actual = ActualState(
+        accounts=(SambaAccount("below", 19999, True), SambaAccount("edge", 20000, True)),
+        folders=(),
+        workflows=(),
+    )
+    plan = plan_cycle([], actual, UID_BASE)
+    assert plan.actions == (DeleteAccount(username="edge"),)
+    assert any("below" in w for w in plan.warnings)
+
+
+def test_entry_without_stored_uid_is_created_again():
     desired = [PaperlessUser(5, "alice", True)]
     actual = ActualState(
-        accounts=(SambaAccount("alice", UNMAPPED_UID, True),),
+        accounts=(SambaAccount("alice", None, True),),
+        folders=(InboxFolder("alice", 20005),),
+        workflows=(ManagedWorkflow(7, "alice"),),
+        unix_uids={"alice": 20005},
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert plan.actions == (CreateAccount(user=desired[0], uid=20005),)
+
+
+def test_entry_without_stored_uid_and_without_user_is_left():
+    actual = ActualState(
+        accounts=(SambaAccount("ghost", None, True),), folders=(), workflows=()
+    )
+    plan = plan_cycle([], actual, UID_BASE)
+    assert plan.actions == ()
+    assert any("ghost" in w for w in plan.warnings)
+
+
+def test_missing_unix_account_is_repaired_from_the_stored_uid():
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
         workflows=(ManagedWorkflow(7, "alice"),),
     )
     plan = plan_cycle(desired, actual, UID_BASE)
     assert plan.actions == (RepairUnixAccount(username="alice", uid=20005),)
-    assert plan.warnings == ()
 
 
 def test_rename_with_reactivation_enables_new_name():

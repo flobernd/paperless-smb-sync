@@ -6,7 +6,6 @@ import pytest
 from smb_sync.cli import format_status, main, regen_password
 from smb_sync.config import Config, MailConfig
 from smb_sync.model import (
-    UNMAPPED_UID,
     ActualState,
     InboxFolder,
     ManagedWorkflow,
@@ -83,13 +82,13 @@ def test_format_status_table():
 
 
 def test_format_status_labels_stranded_account():
-    # a sentinel-uid account that matches no desired user is never removed by
-    # the planner, so it must not read as "pending removal"
+    # the planner leaves an entry without a stored uid untouched when it
+    # matches no desired user, so it must not read as "pending removal"
     desired = [PaperlessUser(5, "alice", True)]
     actual = ActualState(
         accounts=(
             SambaAccount("alice", 20005, True),
-            SambaAccount("orphan", UNMAPPED_UID, True),
+            SambaAccount("orphan", None, True),
         ),
         folders=(),
         workflows=(),
@@ -109,10 +108,10 @@ def test_regen_password_refuses_unmanaged_account(capsys):
     assert system.calls == []
 
 
-def test_regen_password_refuses_stranded_account(capsys):
-    system = FakeSystem(accounts=[SambaAccount("orphan", UNMAPPED_UID, True)])
+def test_regen_password_refuses_an_entry_without_stored_uid(capsys):
+    system = FakeSystem(accounts=[SambaAccount("orphan", None, True)])
     assert regen_password(CFG, system, "orphan", FakeUserApi([])) == 1
-    assert "stranded" in capsys.readouterr().err
+    assert "stores no uid" in capsys.readouterr().err
     assert system.calls == []
 
 

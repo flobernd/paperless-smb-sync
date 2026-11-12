@@ -64,11 +64,17 @@ class FakeSystem:
     def list_inbox_folders(self):
         return []
 
+    def list_unix_uids(self):
+        return {}
+
     def create_unix_user(self, username, uid):
         self.calls.append(("create_unix_user", username, uid))
 
     def set_samba_password(self, username, password, create=False):
         self.calls.append(("set_samba_password", username))
+
+    def store_uid(self, username, uid):
+        self.calls.append(("store_uid", username, uid))
 
     def create_inbox_folder(self, username, uid):
         self.calls.append(("create_inbox_folder", username))

@@ -5,9 +5,21 @@ import pytest
 from smb_sync.model import InboxFolder, SambaAccount
 from smb_sync.system import CommandError, SystemAdapter
 
-PDBEDIT_OUTPUT = """\
-alice:20005:0000000000000000000000000000000A:11112222333344445555666677778888:[U          ]:LCT-68C3A123:
-bob:20006:0000000000000000000000000000000B:99990000AAAABBBBCCCCDDDDEEEEFFFF:[DU         ]:LCT-68C3A456:
+PDBEDIT_VERBOSE = """\
+---------------
+Unix username:        alice
+Account Flags:        [U          ]
+User SID:             S-1-5-21-1-2-3-1000
+Account desc:         smb-sync uid=20005
+Logon time:           Wed, 11 Nov 2026 22:00:00 UTC
+---------------
+Unix username:        bob
+Account Flags:        [DU         ]
+Account desc:
+---------------
+Unix username:        desk
+Account Flags:        [U          ]
+Account desc:         Front desk scanner: do not delete
 """
 
 
@@ -41,13 +53,12 @@ def no_such_user(monkeypatch):
     )
 
 
-def test_list_samba_accounts_parses_uid_and_flags(tmp_path):
-    adapter, _ = make_adapter(
-        tmp_path, {("pdbedit", "-L", "-w"): PDBEDIT_OUTPUT}
-    )
+def test_listing_reads_the_stored_uid_of_each_entry(tmp_path):
+    adapter, _ = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     assert adapter.list_samba_accounts() == [
         SambaAccount("alice", 20005, True),
-        SambaAccount("bob", 20006, False),
+        SambaAccount("bob", None, False),
+        SambaAccount("desk", None, True),
     ]
 
 
@@ -146,10 +157,11 @@ def test_rename_samba_account_exports_imports_then_deletes(tmp_path, monkeypatch
         ("pdbedit", "-L"),
         ("usermod", "--login"),
         ("pdbedit", "-i"),
+        ("pdbedit", "-r"),
         ("pdbedit", "-x"),
     ]
     assert run.calls[1][0] == ("usermod", "--login", "dave", "alice")
-    assert run.calls[3][0] == ("pdbedit", "-x", "-u", "alice")
+    assert run.calls[4][0] == ("pdbedit", "-x", "-u", "alice")
 
 
 def test_rename_samba_account_skips_usermod_when_new_unix_exists(
@@ -249,14 +261,12 @@ def test_rename_samba_account_missing_raises(tmp_path):
 
 
 def test_delete_samba_account_missing_is_noop(tmp_path):
-    adapter, run = make_adapter(tmp_path)
+    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     adapter.delete_samba_account("ghost")
     assert all(call[0][0] != "smbpasswd" for call in run.calls)
 
 
 def test_delete_samba_account_present_runs_smbpasswd(tmp_path):
-    adapter, run = make_adapter(
-        tmp_path, {("pdbedit", "-L", "-w"): PDBEDIT_OUTPUT}
-    )
+    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     adapter.delete_samba_account("alice")
     assert run.calls[-1] == (("smbpasswd", "-x", "alice"), None)

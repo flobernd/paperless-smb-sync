@@ -78,6 +78,9 @@ def _apply(
             system.set_samba_password(user.username, password, create=True)
             log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
             announce(user, password)
+            # the stored uid marks the creation as finished, so it waits until
+            # the password went out
+            system.store_uid(user.username, uid)
         case RepairUnixAccount(username=username, uid=uid):
             system.create_unix_user(username, uid)
             log.warning(

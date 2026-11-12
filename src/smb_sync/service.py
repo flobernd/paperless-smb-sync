@@ -11,7 +11,7 @@ from .executor import execute
 from .mail import send_credentials
 from .model import ActualState, PaperlessUser
 from .paperless import PaperlessClient, PaperlessError
-from .planner import counted_accounts, plan_cycle
+from .planner import counted_uid, plan_cycle
 from .system import CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
@@ -150,12 +150,15 @@ def run_daemon(
 
 def restore_unix_accounts(system: SystemAdapter, uid_base: int) -> int:
     failures = 0
-    for account in counted_accounts(system.list_samba_accounts(), uid_base):
+    for account in system.list_samba_accounts():
+        uid = counted_uid(account, uid_base)
+        if uid is None:
+            continue
         # a rename that stopped before its last step leaves two entries with
         # one uid, and useradd refuses the second, so one failure must not
         # lock out the entries after it
         try:
-            system.create_unix_user(account.username, account.uid)
+            system.create_unix_user(account.username, uid)
         except CommandError as exc:
             log.error(
                 "could not restore the unix account of '%s': %s", account.username, exc

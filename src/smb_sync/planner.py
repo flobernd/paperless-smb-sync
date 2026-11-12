@@ -26,12 +26,18 @@ from .model import (
 _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
+def counted_uid(account: SambaAccount, uid_base: int) -> int | None:
+    # the uid goes into an entry last in a creation, so an entry without one
+    # is either unfinished or not the daemon's
+    if account.uid is not None and account.uid >= uid_base:
+        return account.uid
+    return None
+
+
 def counted_accounts(
     accounts: Iterable[SambaAccount], uid_base: int
 ) -> tuple[SambaAccount, ...]:
-    # the uid goes into an entry last in a creation, so an entry without one
-    # is either unfinished or not the daemon's
-    return tuple(a for a in accounts if a.uid is not None and a.uid >= uid_base)
+    return tuple(a for a in accounts if counted_uid(a, uid_base) is not None)
 
 
 def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
@@ -146,13 +152,13 @@ def plan_cycle(
             actions.extend(_state_change(user.username, True, user.is_active))
             continue
 
-        if user.username not in actual.unix_uids:
+        # never None, since accounts_by_name holds counted entries alone
+        stored_uid = counted_uid(account, uid_base)
+        if user.username not in actual.unix_uids and stored_uid is not None:
             # passdb survived but its unix account did not (container
             # recreation); rebuild it so smbd can map the NT hash again.
             # create_unix_user is idempotent, so this is safe to re-emit.
-            actions.append(
-                RepairUnixAccount(username=user.username, uid=account.uid)
-            )
+            actions.append(RepairUnixAccount(username=user.username, uid=stored_uid))
         missing = _missing_resources(
             user, uid, folders_by_name, workflows_by_username, consume_path
         )

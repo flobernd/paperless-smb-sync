@@ -9,7 +9,7 @@ from .credentials import credentials_block, generate_password
 from .mail import deliver_credentials, send_credentials
 from .model import ActualState, PaperlessUser, Plan, RenameUser
 from .paperless import PaperlessClient, PaperlessError
-from .planner import counted_accounts, plan_cycle
+from .planner import counted_accounts, counted_uid, plan_cycle
 from .service import (
     DEFAULT_HEARTBEAT_PATH,
     heartbeat_is_fresh,
@@ -125,7 +125,7 @@ def regen_password(
             file=sys.stderr,
         )
         return 1
-    if account is None or account.uid < cfg.uid_base:
+    if account is None or counted_uid(account, cfg.uid_base) is None:
         print(f"no managed samba account '{username}'", file=sys.stderr)
         return 1
     password = generate_password()

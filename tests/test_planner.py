@@ -37,11 +37,22 @@ def workflow(workflow_id, username):
 
 
 def empty_state():
-    return ActualState(accounts=(), folders=(), workflows=())
+    return ActualState(
+        accounts=(),
+        folders=(),
+        workflows=(),
+        unix_uids={},
+        documents=(),
+        token_user=None,
+    )
+
+
+def state(**fields):
+    return replace(empty_state(), **fields)
 
 
 def provisioned_state(username="alice", user_id=5, enabled=True, workflow_id=7):
-    return ActualState(
+    return state(
         accounts=(SambaAccount(username, UID_BASE + user_id, enabled),),
         folders=(InboxFolder(username, UID_BASE + user_id),),
         workflows=(workflow(workflow_id, username),),
@@ -57,7 +68,7 @@ def test_steady_state_no_actions():
 
 def test_workflow_with_another_filter_is_updated():
     desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
         workflows=(ManagedWorkflow(7, "alice", "*/alice/*"),),
@@ -83,12 +94,12 @@ def test_new_inactive_user_provisioned_disabled():
     desired = [PaperlessUser(5, "alice", False)]
     plan = planned(desired, empty_state())
     assert DisableAccount(username="alice") in plan.actions
-    assert CreateAccount(user=desired[0], uid=20005) in plan.actions
+    assert CreateAccount(user=desired[0], uid=20005, upload=False) in plan.actions
 
 
 def test_missing_folder_and_workflow_repaired():
     desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(),
         workflows=(),
@@ -105,7 +116,7 @@ def test_existing_folder_wrong_uid_is_adopted():
     # steady state: the folder is present under the right name but carries a
     # stale uid, so the planner corrects its owner for the account to write to it
     desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 1000),),
         workflows=(workflow(7, "alice"),),
@@ -119,14 +130,14 @@ def test_new_account_adopts_an_existing_folder_with_another_uid():
     # no account yet, but an inbox folder of that name exists under another
     # uid and must be adopted
     desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(),
         folders=(InboxFolder("alice", 1000),),
         workflows=(),
     )
     plan = planned(desired, actual)
     assert plan.actions == (
-        CreateAccount(user=desired[0], uid=20005),
+        CreateAccount(user=desired[0], uid=20005, upload=False),
         CreateFolder(username="alice", uid=20005),
         CreateWorkflow(user_id=5, username="alice"),
     )
@@ -135,24 +146,28 @@ def test_new_account_adopts_an_existing_folder_with_another_uid():
 def test_removal_takes_the_workflow_and_the_folder_of_the_account():
     plan = planned([], provisioned_state())
     assert plan.actions == (
-        Deprovision(username="alice", workflow_id=7, delete_folder=True),
+        Deprovision(
+            username="alice", workflow_id=7, delete_folder=True, documents=None
+        ),
     )
 
 
 def test_stale_account_keeps_a_folder_of_another_uid():
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20009),),
         workflows=(),
     )
     plan = planned([], actual)
     assert plan.actions == (
-        Deprovision(username="alice", workflow_id=None, delete_folder=False),
+        Deprovision(
+            username="alice", workflow_id=None, delete_folder=False, documents=None
+        ),
     )
 
 
 def test_stale_folder_beside_an_entry_that_does_not_count_deletes_nothing():
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("bob", None, True),),
         folders=(InboxFolder("bob", 20006),),
         workflows=(),
@@ -162,7 +177,7 @@ def test_stale_folder_beside_an_entry_that_does_not_count_deletes_nothing():
 
 
 def test_at_most_one_deprovision_per_cycle():
-    actual = ActualState(
+    actual = state(
         accounts=(
             SambaAccount("alice", 20005, True),
             SambaAccount("bob", 20006, True),
@@ -173,7 +188,7 @@ def test_at_most_one_deprovision_per_cycle():
     plan = planned([], actual)
     removals = [a for a in plan.actions if isinstance(a, Deprovision)]
     assert removals == [
-        Deprovision(username="alice", workflow_id=7, delete_folder=True)
+        Deprovision(username="alice", workflow_id=7, delete_folder=True, documents=None)
     ]
     assert any("bob" in w and "deferred" in w for w in plan.warnings)
     # bob's workflow removal is non-destructive and not deferred
@@ -182,7 +197,7 @@ def test_at_most_one_deprovision_per_cycle():
 
 def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
     desired = [PaperlessUser(5, "dave", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(
             SambaAccount("alice", 20005, True),
             SambaAccount("dave", 20005, True),
@@ -193,14 +208,16 @@ def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
     )
     plan = planned(desired, actual)
     assert (
-        Deprovision(username="alice", workflow_id=None, delete_folder=False)
+        Deprovision(
+            username="alice", workflow_id=None, delete_folder=False, documents=None
+        )
         in plan.actions
     )
 
 
 def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
     # the removal of alice closed her login in an earlier cycle and then failed
-    actual = ActualState(
+    actual = state(
         accounts=(
             SambaAccount("alice", 20005, False),
             SambaAccount("bob", 20006, True),
@@ -210,13 +227,15 @@ def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
     )
     plan = planned([], actual)
     assert plan.actions == (
-        Deprovision(username="bob", workflow_id=None, delete_folder=False),
+        Deprovision(
+            username="bob", workflow_id=None, delete_folder=False, documents=None
+        ),
     )
     assert any("alice" in w for w in plan.warnings)
 
 
 def test_unmanaged_account_untouched():
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("legacy", 1000, True),),
         folders=(),
         workflows=(),
@@ -240,7 +259,7 @@ def test_rename_detected_by_uid():
 
 
 def test_folder_without_account_is_warned_not_deleted():
-    actual = ActualState(
+    actual = state(
         accounts=(), folders=(InboxFolder("archive", 65534),), workflows=()
     )
     plan = planned([], actual)
@@ -249,7 +268,7 @@ def test_folder_without_account_is_warned_not_deleted():
 
 
 def test_unmanaged_folder_warned_not_deleted():
-    actual = ActualState(
+    actual = state(
         accounts=(), folders=(InboxFolder("manual", 0),), workflows=()
     )
     plan = planned([], actual)
@@ -274,20 +293,20 @@ def test_invalid_rename_preserves_existing_resources():
 
 def test_user_named_like_another_unix_account_is_skipped():
     desired = [PaperlessUser(5, "mail", True)]
-    taken = ActualState(accounts=(), folders=(), workflows=(), unix_uids={"mail": 8})
+    taken = state(accounts=(), folders=(), workflows=(), unix_uids={"mail": 8})
     plan = planned(desired, taken)
     assert plan.actions == ()
     assert any("mail" in w for w in plan.warnings)
 
     # the same name with the user's own uid is a creation that stopped early
-    own = ActualState(accounts=(), folders=(), workflows=(), unix_uids={"mail": 20005})
+    own = state(accounts=(), folders=(), workflows=(), unix_uids={"mail": 20005})
     plan = planned(desired, own)
-    assert CreateAccount(user=desired[0], uid=20005) in plan.actions
+    assert CreateAccount(user=desired[0], uid=20005, upload=False) in plan.actions
 
 
 def test_rename_to_the_name_of_another_unix_account_changes_nothing():
     desired = [PaperlessUser(5, "mail", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
         workflows=(workflow(7, "alice"),),
@@ -316,7 +335,7 @@ def test_stale_folder_with_desired_uid_frozen_with_warning():
     # in a half-completed rename the old folder still carries the real
     # uid of a desired user, so deleting it would destroy that user's data
     desired = [PaperlessUser(5, "dave", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(), folders=(InboxFolder("alice", 20005),), workflows=()
     )
     plan = planned(desired, actual)
@@ -326,32 +345,34 @@ def test_stale_folder_with_desired_uid_frozen_with_warning():
 
 def test_stored_uid_below_the_range_does_not_count():
     # 19999 is the last uid outside the range, 20000 the first inside
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("below", 19999, True), SambaAccount("edge", 20000, True)),
         folders=(),
         workflows=(),
     )
     plan = planned([], actual)
     assert plan.actions == (
-        Deprovision(username="edge", workflow_id=None, delete_folder=False),
+        Deprovision(
+            username="edge", workflow_id=None, delete_folder=False, documents=None
+        ),
     )
     assert any("below" in w for w in plan.warnings)
 
 
 def test_entry_without_stored_uid_is_created_again():
     desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", None, True),),
         folders=(InboxFolder("alice", 20005),),
         workflows=(workflow(7, "alice"),),
         unix_uids={"alice": 20005},
     )
     plan = planned(desired, actual)
-    assert plan.actions == (CreateAccount(user=desired[0], uid=20005),)
+    assert plan.actions == (CreateAccount(user=desired[0], uid=20005, upload=False),)
 
 
 def test_entry_without_stored_uid_and_without_user_is_left():
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("ghost", None, True),), folders=(), workflows=()
     )
     plan = planned([], actual)
@@ -361,7 +382,7 @@ def test_entry_without_stored_uid_and_without_user_is_left():
 
 def test_missing_unix_account_is_repaired_from_the_stored_uid():
     desired = [PaperlessUser(5, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
         workflows=(workflow(7, "alice"),),
@@ -391,7 +412,7 @@ ADMIN = TokenUser(1, True)
 def test_pending_document_goes_to_the_user_with_its_id():
     # uploaded for user 5 under the name alice, who is dave now, while user 9 took the name alice
     desired = [PaperlessUser(5, "dave", True), PaperlessUser(9, "alice", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("alice", 20009, True), SambaAccount("dave", 20005, True)),
         folders=(InboxFolder("alice", 20009), InboxFolder("dave", 20005)),
         workflows=(workflow(8, "alice"), workflow(7, "dave")),
@@ -409,7 +430,7 @@ def test_rename_retitles_the_document_of_the_user():
     actual = replace(
         provisioned_state(),
         token_user=ADMIN,
-        documents=(CredentialDocument(40, "alice", 5),),
+        documents=(CredentialDocument(40, "alice", 5, recipient_id=None),),
     )
     assert (
         RenameDocument(document_id=40, old_username="alice", new_username="dave")
@@ -418,15 +439,15 @@ def test_rename_retitles_the_document_of_the_user():
 
 
 def test_document_without_owner_or_account_is_deleted():
-    actual = ActualState(
+    actual = state(
         accounts=(),
         folders=(),
         workflows=(),
         token_user=ADMIN,
         documents=(
-            CredentialDocument(40, "alice", None),
+            CredentialDocument(40, "alice", None, recipient_id=None),
             CredentialDocument(41, "bob", 1, recipient_id=6),
-            CredentialDocument(42, "carol", 9),
+            CredentialDocument(42, "carol", 9, recipient_id=None),
         ),
     )
     assert planned([], actual).actions == (
@@ -441,10 +462,10 @@ def test_removal_takes_the_documents_of_that_account_only():
         accounts=(SambaAccount("alice", 20005, True), SambaAccount("bob", 20006, True)),
         token_user=ADMIN,
         documents=(
-            CredentialDocument(40, "alice", 5),
-            CredentialDocument(41, "bob", 6),
+            CredentialDocument(40, "alice", 5, recipient_id=None),
+            CredentialDocument(41, "bob", 6, recipient_id=None),
             CredentialDocument(42, "bob", 1, recipient_id=6),
-            CredentialDocument(43, "alice", None),
+            CredentialDocument(43, "alice", None, recipient_id=None),
         ),
     )
     assert planned([], actual).actions == (
@@ -457,14 +478,14 @@ def test_removal_takes_the_documents_of_that_account_only():
 def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
     # the user of the token is in the sync group and leaves it
     desired = [PaperlessUser(6, "bob", True)]
-    actual = ActualState(
+    actual = state(
         accounts=(SambaAccount("admin", 20001, True), SambaAccount("bob", 20006, True)),
         folders=(InboxFolder("bob", 20006),),
         workflows=(workflow(8, "bob"),),
         unix_uids={"admin": 20001, "bob": 20006},
         token_user=ADMIN,
         documents=(
-            CredentialDocument(40, "admin", 1),
+            CredentialDocument(40, "admin", 1, recipient_id=None),
             CredentialDocument(41, "bob", 1, recipient_id=6),
         ),
     )

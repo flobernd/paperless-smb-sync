@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ class CredentialDocument:
     id: int
     username: str
     owner_id: int | None
-    recipient_id: int | None = None
+    recipient_id: int | None
 
 
 @dataclass(frozen=True)
@@ -55,16 +55,16 @@ class ActualState:
     accounts: tuple[SambaAccount, ...]
     folders: tuple[InboxFolder, ...]
     workflows: tuple[ManagedWorkflow, ...]
-    unix_uids: Mapping[str, int] = field(default_factory=dict)
-    documents: tuple[CredentialDocument, ...] = ()
-    token_user: TokenUser | None = None
+    unix_uids: Mapping[str, int]
+    documents: tuple[CredentialDocument, ...]
+    token_user: TokenUser | None
 
 
 @dataclass(frozen=True)
 class CreateAccount:
     user: PaperlessUser
     uid: int
-    upload: bool = False
+    upload: bool
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,7 @@ class Deprovision:
     username: str
     workflow_id: int | None
     delete_folder: bool
-    documents: tuple[int, ...] | None = None
+    documents: tuple[int, ...] | None
 
 
 @dataclass(frozen=True)

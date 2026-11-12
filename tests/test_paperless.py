@@ -238,7 +238,7 @@ def test_only_the_exact_title_forms_make_a_credentials_document():
         }
     )
     assert client.fetch_credential_documents() == [
-        CredentialDocument(40, "alice", 5),
+        CredentialDocument(40, "alice", 5, recipient_id=None),
         CredentialDocument(42, "bob", 1, recipient_id=6),
     ]
 

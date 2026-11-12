@@ -53,6 +53,9 @@ def test_format_status_table():
         workflows=(
             ManagedWorkflow(7, "alice", "/usr/src/paperless/consume/alice/*"),
         ),
+        unix_uids={},
+        documents=(),
+        token_user=None,
     )
     plan = plan_cycle(desired, actual, 20000, CONSUME)
     output = format_status(desired, actual, plan, 20000)
@@ -81,6 +84,8 @@ def test_status_labels_follow_the_plan():
         folders=(),
         workflows=(),
         unix_uids={"alice": 20005, "bob": 20006, "gone": 20009},
+        documents=(),
+        token_user=None,
     )
     plan = plan_cycle(desired, actual, 20000, CONSUME)
     text = format_status(desired, actual, plan, 20000)
@@ -191,7 +196,10 @@ DOCUMENT_CFG = replace(CFG, credentials_document=True)
 def test_regen_adds_a_version_to_the_document_of_the_user(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
     api = FakeDocumentApi(
-        [CredentialDocument(41, "alice", 9), CredentialDocument(40, "alice", 5)]
+        [
+            CredentialDocument(41, "alice", 9, recipient_id=None),
+            CredentialDocument(40, "alice", 5, recipient_id=None),
+        ]
     )
     assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
     (document_id, block), = api.versions
@@ -213,7 +221,7 @@ def test_regen_of_the_token_user_leaves_the_uploads_for_other_users(capsys):
     api = FakeDocumentApi(
         [
             CredentialDocument(41, "bob", 1, recipient_id=6),
-            CredentialDocument(40, "admin", 1),
+            CredentialDocument(40, "admin", 1, recipient_id=None),
         ]
     )
     assert regen_password(DOCUMENT_CFG, system, "admin", api) == 0
@@ -223,7 +231,7 @@ def test_regen_of_the_token_user_leaves_the_uploads_for_other_users(capsys):
 
 def test_regen_resets_the_rights_of_the_document_before_it_writes(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    api = FakeDocumentApi([CredentialDocument(40, "alice", 5)])
+    api = FakeDocumentApi([CredentialDocument(40, "alice", 5, recipient_id=None)])
     assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
     assert [call[:2] for call in api.calls] == [
         ("hand_over_document", 40),

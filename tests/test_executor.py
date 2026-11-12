@@ -100,7 +100,7 @@ def run(actions, system=None, api=None):
 
 def test_create_account_sets_password_and_prints_once(capsys):
     user = PaperlessUser(5, "alice", True)
-    failures, system, _ = run([CreateAccount(user=user, uid=20005)])
+    failures, system, _ = run([CreateAccount(user=user, uid=20005, upload=False)])
     assert failures == 0
     assert system.calls[0] == ("create_unix_user", "alice", 20005)
     name, username, password, create = system.calls[1]
@@ -118,7 +118,7 @@ def test_creation_stores_the_uid_only_after_the_credentials_went_out(monkeypatch
 
     monkeypatch.setattr("smb_sync.executor.credentials_block", broken_block)
     user = PaperlessUser(5, "alice", True)
-    failures, system, _ = run([CreateAccount(user=user, uid=20005)])
+    failures, system, _ = run([CreateAccount(user=user, uid=20005, upload=False)])
     assert failures == 1
     assert all(call[0] != "store_uid" for call in system.calls)
 
@@ -153,7 +153,11 @@ def test_repair_unix_account_recreates_unix_user_only():
 def test_removal_stops_at_the_first_failed_step():
     system = FakeSystem(fail_on="delete_inbox_folder")
     failures, system, api = run(
-        [Deprovision(username="alice", workflow_id=7, delete_folder=True)],
+        [
+            Deprovision(
+                username="alice", workflow_id=7, delete_folder=True, documents=None
+            )
+        ],
         system=system,
     )
     assert failures == 1
@@ -163,7 +167,11 @@ def test_removal_stops_at_the_first_failed_step():
 
 def test_removal_without_the_folder_flag_leaves_the_folder():
     failures, system, api = run(
-        [Deprovision(username="alice", workflow_id=None, delete_folder=False)]
+        [
+            Deprovision(
+                username="alice", workflow_id=None, delete_folder=False, documents=None
+            )
+        ]
     )
     assert failures == 0
     assert system.calls == [
@@ -182,7 +190,12 @@ def test_removal_closes_the_login_before_the_workflow_step():
 
     api.delete_workflow = refuse
     failures, system, _ = run(
-        [Deprovision(username="alice", workflow_id=7, delete_folder=True)], api=api
+        [
+            Deprovision(
+                username="alice", workflow_id=7, delete_folder=True, documents=None
+            )
+        ],
+        api=api,
     )
     assert failures == 1
     assert system.calls == [("disable_samba_account", "alice")]

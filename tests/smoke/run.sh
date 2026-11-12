@@ -122,6 +122,17 @@ trash_empty() {
     trash=$(api "$API/api/trash/") || return
     jq -e '.count == 0' <<<"$trash" >/dev/null
 }
+# the json content type of api would replace the multipart one of the upload
+upload_text() {
+    with_token "$TOKEN" -F "title=$1" -F "document=@-;filename=$2" \
+        "$API/api/documents/post_document/" <<<"$3" >/dev/null
+}
+titled_id() {
+    local documents
+    documents=$(with_token "$TOKEN" -G --data-urlencode "title__iexact=$1" \
+        "$API/api/documents/") || return
+    jq -er '.results[0].id' <<<"$documents"
+}
 smb_healthy() {
     local status
     status=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q smb)") \
@@ -275,6 +286,31 @@ api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"groups":[]}' >/dev/null
 wait_for "the document of gina was not deleted" document_gone "$DOCUMENT_ID"
 # the empty action follows the DELETE in a request of its own
 wait_for "the trash still holds a document" trash_empty
+
+echo "== asserting the deletion of a credentials document without an owner =="
+upload_text '[smb-sync] credentials ghost' smb-credentials.txt 'smoke credentials of ghost' \
+    || fail "could not upload the credentials file of ghost"
+upload_text '[smb-sync] credentials phantom' notes.txt 'smoke notes of phantom' \
+    || fail "could not upload the notes of phantom"
+wait_for "the credentials file of ghost was not imported" \
+    sees_document "$TOKEN" '[smb-sync] credentials ghost'
+wait_for "the notes of phantom were not imported" \
+    sees_document "$TOKEN" '[smb-sync] credentials phantom'
+GHOST_ID=$(titled_id '[smb-sync] credentials ghost') || fail "no id for the document of ghost"
+PHANTOM_ID=$(titled_id '[smb-sync] credentials phantom') \
+    || fail "no id for the document of phantom"
+for id in "$GHOST_ID" "$PHANTOM_ID"; do
+    api -X PATCH "$API/api/documents/$id/" -d '{"owner":null}' >/dev/null \
+        || fail "could not remove the owner of document $id"
+done
+wait_for "the credentials file of ghost was not deleted" document_gone "$GHOST_ID"
+wait_for "the trash still holds a document" trash_empty
+# A cycle can delete the first document and still be on its way to the
+# second. The sync waits for the cycle lock, so the check below follows a
+# whole cycle that saw both documents without an owner.
+compose exec -T smb smb-sync sync >/dev/null || fail "the sync command failed"
+api "$API/api/documents/$PHANTOM_ID/" >/dev/null \
+    || fail "the notes of phantom were deleted for their title alone"
 
 echo "== asserting deprovisioning =="
 api -X PATCH "$API/api/users/$USER_ID/" -d '{"groups":[]}' >/dev/null

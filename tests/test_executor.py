@@ -85,7 +85,7 @@ class FakeApi:
         self.calls.append(("update_workflow", workflow_id, user_id, username))
 
 
-def run(actions, system=None, api=None, upload=False):
+def run(actions, system=None, api=None):
     system = system or FakeSystem()
     api = api or FakeApi()
     failures = execute(
@@ -94,7 +94,6 @@ def run(actions, system=None, api=None, upload=False):
         api,
         smb_host="nas.lan",
         share_name="inbox",
-        upload=upload,
     )
     return failures, system, api
 
@@ -249,9 +248,8 @@ def test_a_failed_upload_does_not_fail_the_creation(caplog):
     user = PaperlessUser(5, "alice", True)
     with caplog.at_level(logging.ERROR):
         failures, system, _ = run(
-            [CreateAccount(user=user, uid=20005)],
+            [CreateAccount(user=user, uid=20005, upload=True)],
             api=FakeApi(fail_upload=True),
-            upload=True,
         )
     assert failures == 0
     assert system.calls[-1] == ("store_uid", "alice", 20005)
@@ -261,7 +259,7 @@ def test_a_failed_upload_does_not_fail_the_creation(caplog):
 def test_the_uploaded_block_drops_the_lines_for_the_log(capsys):
     api = FakeApi()
     user = PaperlessUser(5, "alice", True)
-    run([CreateAccount(user=user, uid=20005)], api=api, upload=True)
+    run([CreateAccount(user=user, uid=20005, upload=True)], api=api)
     (block,) = api.blocks
     assert "Username: alice" in block
     assert "smb-sync regen" not in block

@@ -178,8 +178,6 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, ValueError) as exc:
         print(f"smb-sync: {exc}", file=sys.stderr)
         return 2
-    api = PaperlessClient(cfg.paperless_url, cfg.paperless_token, cfg.consume_path)
-    system = SystemAdapter(INBOX_ROOT, cfg.paperless_gid)
 
     if args.command == "check":
         return 0
@@ -188,6 +186,9 @@ def main(argv: list[str] | None = None) -> int:
             DEFAULT_HEARTBEAT_PATH, cfg.poll_interval, time.time()
         )
         return 0 if fresh else 1
+
+    api = PaperlessClient(cfg.paperless_url, cfg.paperless_token, cfg.consume_path)
+    system = SystemAdapter(INBOX_ROOT, cfg.paperless_gid)
     if args.command == "restore":
         try:
             failures = restore_unix_accounts(system, cfg.uid_base)

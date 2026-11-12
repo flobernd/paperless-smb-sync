@@ -175,7 +175,7 @@ def test_daemon_survives_cycle_crash(monkeypatch, tmp_path):
 
 def test_standing_warning_is_due_again_after_the_interval():
     now = [0.0]
-    repeat = WarningRepeat(interval=3600.0, clock=lambda: now[0])
+    repeat = WarningRepeat(clock=lambda: now[0])
     assert repeat.due(["w"]) == ["w"]
     now[0] = 3599.0
     assert repeat.due(["w"]) == []

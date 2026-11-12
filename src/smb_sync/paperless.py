@@ -1,5 +1,6 @@
 import re
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 import requests
@@ -22,6 +23,13 @@ _DOCUMENT_TITLE = re.compile(
     + r"(?P<username>[^ ]+)(?: \(user (?P<user_id>[0-9]+)\))?"
 )
 
+
+def _document_title(username: str, user_id: int | None = None) -> str:
+    if user_id is None:
+        return f"{DOCUMENT_PREFIX}{username}"
+    return f"{DOCUMENT_PREFIX}{username} (user {user_id})"
+
+
 # verified against paperless-ngx source: WorkflowTriggerType.CONSUMPTION,
 # DocumentSource.ConsumeFolder, WorkflowActionType.ASSIGNMENT
 _TRIGGER_CONSUMPTION = 1
@@ -33,6 +41,14 @@ _TIMEOUT = 30
 
 class PaperlessError(Exception):
     pass
+
+
+@contextmanager
+def _unexpected_body(what: str) -> Generator[None, None, None]:
+    try:
+        yield
+    except (ValueError, KeyError, TypeError) as exc:
+        raise PaperlessError(f"{what} returned an unexpected body: {exc}") from exc
 
 
 def _workflow_payload(user_id: int, username: str, consume_path: str) -> dict[str, Any]:
@@ -128,15 +144,24 @@ class PaperlessClient:
         while url:
             response = self._send("GET", url, params=query)
             query = None
-            try:
+            with _unexpected_body(f"GET {url}"):
                 payload = response.json()
                 results.extend(payload["results"])
                 url = payload.get("next")
-            except (ValueError, KeyError, TypeError) as exc:
-                raise PaperlessError(
-                    f"GET {url} returned an unexpected body: {exc}"
-                ) from exc
         return results
+
+    def _empty_trash(self, document_ids: Sequence[int]) -> None:
+        # the action without ids empties the whole trash, so an empty list is
+        # not sent either
+        if document_ids:
+            self._send(
+                "POST",
+                "/api/trash/",
+                json={"action": "empty", "documents": document_ids},
+            )
+
+    def _trash_document(self, document_id: int) -> None:
+        self._send("DELETE", f"/api/documents/{document_id}/", tolerate=(404,))
 
     def fetch_desired_users(self, group_name: str) -> list[PaperlessUser]:
         groups = self._get_all("/api/groups/", {"name__iexact": group_name})
@@ -146,8 +171,8 @@ class PaperlessClient:
             raise PaperlessError(f"paperless group '{group_name}' does not exist")
         path = "/api/users/"
         users = self._get_all(path)
-        try:
-            return [
+        with _unexpected_body(path):
+            members = [
                 PaperlessUser(
                     id=u["id"],
                     username=u["username"],
@@ -156,24 +181,22 @@ class PaperlessClient:
                 for u in users
                 if group_id in u["groups"]
             ]
-        except (KeyError, TypeError) as exc:
-            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
+        return members
 
     def fetch_managed_workflows(self) -> list[ManagedWorkflow]:
         path = "/api/workflows/"
         workflows = self._get_all(path)
-        try:
-            return [
+        with _unexpected_body(path):
+            managed = [
                 ManagedWorkflow(
                     id=w["id"],
-                    username=w["name"][len(WORKFLOW_PREFIX) :],
+                    username=w["name"].removeprefix(WORKFLOW_PREFIX),
                     filter_path=_trigger_filter(w),
                 )
                 for w in workflows
                 if w["name"].startswith(WORKFLOW_PREFIX)
             ]
-        except (KeyError, TypeError) as exc:
-            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
+        return managed
 
     def create_workflow(self, user_id: int, username: str) -> None:
         self._send(
@@ -207,15 +230,13 @@ class PaperlessClient:
 
     def delete_credentials(self, username: str, document_ids: Sequence[int]) -> None:
         for document_id in document_ids:
-            self._send("DELETE", f"/api/documents/{document_id}/", tolerate=(404,))
+            self._trash_document(document_id)
         # the listing also finds what a removal that stopped after its DELETE
         # left in the trash
         path = "/api/trash/"
         records = self._get_all(path)
-        try:
+        with _unexpected_body(path):
             documents = [(r["id"], _credential_document(r)) for r in records]
-        except (KeyError, TypeError) as exc:
-            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
         # a document of the removal can still carry an earlier name of the user
         removed = set(document_ids)
         trashed = [
@@ -223,19 +244,12 @@ class PaperlessClient:
             for i, d in documents
             if i in removed or (d is not None and d.username == username)
         ]
-        # the action without ids empties the whole trash, so an empty list is
-        # not sent either
-        if trashed:
-            self._send(
-                "POST", path, json={"action": "empty", "documents": trashed}
-            )
+        self._empty_trash(trashed)
 
     def delete_document(self, document_id: int) -> None:
         # a document in the trash answers 404 and still needs the empty action
-        self._send("DELETE", f"/api/documents/{document_id}/", tolerate=(404,))
-        self._send(
-            "POST", "/api/trash/", json={"action": "empty", "documents": [document_id]}
-        )
+        self._trash_document(document_id)
+        self._empty_trash([document_id])
 
     def fetch_credential_documents(self) -> list[CredentialDocument]:
         path = "/api/documents/"
@@ -245,10 +259,8 @@ class PaperlessClient:
         records = self._get_all(
             path, {"title__istartswith": DOCUMENT_PREFIX, "fields": "id,owner,title"}
         )
-        try:
+        with _unexpected_body(path):
             documents = [_credential_document(r) for r in records]
-        except (KeyError, TypeError) as exc:
-            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
         return [d for d in documents if d is not None]
 
     def hand_over_document(self, document_id: int, user_id: int, username: str) -> None:
@@ -257,7 +269,7 @@ class PaperlessClient:
             "PATCH",
             f"/api/documents/{document_id}/",
             json={
-                "title": f"{DOCUMENT_PREFIX}{username}",
+                "title": _document_title(username),
                 "owner": user_id,
                 "set_permissions": {"view": rights, "change": rights},
             },
@@ -267,22 +279,21 @@ class PaperlessClient:
         self._send(
             "PATCH",
             f"/api/documents/{document_id}/",
-            json={"title": f"{DOCUMENT_PREFIX}{username}"},
+            json={"title": _document_title(username)},
         )
 
     def token_user(self) -> TokenUser:
         path = "/api/ui_settings/"
         response = self._send("GET", path)
-        try:
+        with _unexpected_body(path):
             user = response.json()["user"]
-            return TokenUser(id=user["id"], is_superuser=user["is_superuser"])
-        except (ValueError, KeyError, TypeError) as exc:
-            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
+            token_user = TokenUser(id=user["id"], is_superuser=user["is_superuser"])
+        return token_user
 
     def upload_credentials(self, user_id: int, username: str, block: str) -> None:
         self._send(
             "POST",
             "/api/documents/post_document/",
-            data={"title": f"{DOCUMENT_PREFIX}{username} (user {user_id})"},
+            data={"title": _document_title(username, user_id)},
             files=_block_file(block),
         )

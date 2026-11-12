@@ -17,6 +17,13 @@ class SambaAccount:
 
 
 @dataclass(frozen=True)
+class ManagedAccount:
+    username: str
+    uid: int
+    enabled: bool
+
+
+@dataclass(frozen=True)
 class InboxFolder:
     name: str
     uid: int
@@ -57,6 +64,7 @@ class ActualState:
 class CreateAccount:
     user: PaperlessUser
     uid: int
+    upload: bool = False
 
 
 @dataclass(frozen=True)
@@ -156,7 +164,7 @@ Action = (
 class Plan:
     actions: tuple[Action, ...]
     warnings: tuple[str, ...]
-    pending_removal: tuple[str, ...] = ()
+    pending_removal: tuple[str, ...]
 
 
 def workflow_filter(consume_path: str, username: str) -> str:

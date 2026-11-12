@@ -15,6 +15,7 @@ from .model import (
     EnableAccount,
     HandOverDocument,
     InboxFolder,
+    ManagedAccount,
     ManagedWorkflow,
     PaperlessUser,
     Plan,
@@ -47,8 +48,12 @@ def counted_uid(account: SambaAccount, uid_base: int) -> int | None:
 
 def counted_accounts(
     accounts: Iterable[SambaAccount], uid_base: int
-) -> tuple[SambaAccount, ...]:
-    return tuple(a for a in accounts if counted_uid(a, uid_base) is not None)
+) -> tuple[ManagedAccount, ...]:
+    return tuple(
+        ManagedAccount(username=a.username, uid=uid, enabled=a.enabled)
+        for a in accounts
+        if (uid := counted_uid(a, uid_base)) is not None
+    )
 
 
 def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
@@ -59,29 +64,32 @@ def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
     return []
 
 
-def _missing_resources(
-    user: PaperlessUser,
-    uid: int,
-    folders_by_name: Mapping[str, InboxFolder],
-    workflows_by_username: Mapping[str, ManagedWorkflow],
-    consume_path: str,
+def _missing_folder(
+    user: PaperlessUser, uid: int, folders_by_name: Mapping[str, InboxFolder]
 ) -> list[Action]:
-    actions: list[Action] = []
     # an existing folder is adopted rather than recreated. Correcting its owner
     # uid also takes over a folder of that name that exists under another uid.
     folder = folders_by_name.get(user.username)
     if folder is None or folder.uid != uid:
-        actions.append(CreateFolder(username=user.username, uid=uid))
+        return [CreateFolder(username=user.username, uid=uid)]
+    return []
+
+
+def _missing_workflow(
+    user: PaperlessUser,
+    workflows_by_username: Mapping[str, ManagedWorkflow],
+    consume_path: str,
+) -> list[Action]:
     workflow = workflows_by_username.get(user.username)
     if workflow is None:
-        actions.append(CreateWorkflow(user_id=user.id, username=user.username))
-    elif workflow.filter_path != workflow_filter(consume_path, user.username):
-        actions.append(
+        return [CreateWorkflow(user_id=user.id, username=user.username)]
+    if workflow.filter_path != workflow_filter(consume_path, user.username):
+        return [
             UpdateWorkflow(
                 workflow_id=workflow.id, user_id=user.id, username=user.username
             )
-        )
-    return actions
+        ]
+    return []
 
 
 def user_documents(
@@ -98,18 +106,19 @@ def user_documents(
 
 
 def _removal_documents(
-    account: SambaAccount,
+    account: ManagedAccount,
     uid_base: int,
     desired_uids: Container[int],
     documents: Sequence[CredentialDocument],
     token_user: TokenUser | None,
 ) -> tuple[int, ...] | None:
-    stored_uid = counted_uid(account, uid_base)
     # the old name of a rename has the uid of a desired user, who keeps the
     # documents
-    if token_user is None or stored_uid is None or stored_uid in desired_uids:
+    if token_user is None or account.uid in desired_uids:
         return None
-    owned = {d.id for d in user_documents(documents, stored_uid - uid_base, token_user)}
+    owned = {
+        d.id for d in user_documents(documents, account.uid - uid_base, token_user)
+    }
     return tuple(
         d.id
         for d in documents
@@ -122,7 +131,7 @@ def _document_action(
     token_user: TokenUser,
     users_by_id: Mapping[int, PaperlessUser],
     desired_ids: Container[int],
-    stored_uids: Container[int | None],
+    stored_uids: Container[int],
     uid_base: int,
 ) -> Action | None:
     if document.owner_id is None:
@@ -185,6 +194,10 @@ def plan_cycle(
     workflows_by_username = {w.username: w for w in actual.workflows}
     desired_names = {u.username for u in valid}
 
+    delivery = actual.token_user
+    if delivery is not None and not delivery.is_superuser:
+        delivery = None
+
     renamed_from: set[str] = set()
 
     for user in valid:
@@ -224,35 +237,31 @@ def plan_cycle(
                     _state_change(user.username, holder.enabled, user.is_active)
                 )
                 continue
-            actions.append(CreateAccount(user=user, uid=uid))
-            actions.extend(
-                _missing_resources(
-                    user, uid, folders_by_name, workflows_by_username, consume_path
-                )
+            actions.append(
+                CreateAccount(user=user, uid=uid, upload=delivery is not None)
             )
+            actions.extend(_missing_folder(user, uid, folders_by_name))
+            actions.extend(_missing_workflow(user, workflows_by_username, consume_path))
             # smbpasswd -a creates the account enabled
             actions.extend(_state_change(user.username, True, user.is_active))
             continue
 
-        # never None, since accounts_by_name holds counted entries alone
-        stored_uid = counted_uid(account, uid_base)
-        if user.username not in actual.unix_uids and stored_uid is not None:
+        if user.username not in actual.unix_uids:
             # passdb survived a recreation of the container but the unix
             # account of this entry did not. smbd needs that account to map the
             # NT hash.
             # create_unix_user is idempotent, so this is safe to re-emit.
-            actions.append(RepairUnixAccount(username=user.username, uid=stored_uid))
-        missing = _missing_resources(
-            user, uid, folders_by_name, workflows_by_username, consume_path
-        )
+            actions.append(RepairUnixAccount(username=user.username, uid=account.uid))
+        missing = _missing_workflow(user, workflows_by_username, consume_path)
         if account.uid != uid:
+            # the planner cannot tell whose data the folder holds, so a chown
+            # would hand it to the paperless user who has the name now
             warnings.append(
                 f"account '{user.username}' has uid {account.uid}, expected {uid}, "
                 f"and was left as it is"
             )
-            # the planner cannot tell whose data the folder holds, so a chown
-            # would hand it to the paperless user who has the name now
-            missing = [a for a in missing if not isinstance(a, CreateFolder)]
+        else:
+            missing = _missing_folder(user, uid, folders_by_name) + missing
         actions.extend(_state_change(user.username, account.enabled, user.is_active))
         actions.extend(missing)
 
@@ -260,7 +269,10 @@ def plan_cycle(
     protected_names = {a.username for a in counted if a.uid in invalid_uids}
 
     for account in actual.accounts:
-        if account not in counted and account.username not in desired_names:
+        if (
+            counted_uid(account, uid_base) is None
+            and account.username not in desired_names
+        ):
             warnings.append(
                 f"samba entry '{account.username}' stores no uid of the managed "
                 f"range and was left untouched"
@@ -311,10 +323,8 @@ def plan_cycle(
         warnings.append(
             f"deprovisioning of '{name}' deferred to a later cycle (one per cycle)"
         )
-    delivery = actual.token_user
-    if delivery is not None and not delivery.is_superuser:
+    if actual.token_user is not None and delivery is None:
         warnings.append(NO_SUPERUSER_WARNING)
-        delivery = None
     deprovisioned = set(candidates[:1])
     held: set[int] = set()
     for name in deprovisioned:

@@ -9,7 +9,7 @@ from .config import Config
 from .executor import execute
 from .model import ActualState, CredentialDocument, PaperlessUser, TokenUser
 from .paperless import PaperlessClient, PaperlessError
-from .planner import counted_uid, plan_cycle
+from .planner import counted_accounts, plan_cycle
 from .system import CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
@@ -17,14 +17,11 @@ log = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_PATH = "/run/smb-sync.heartbeat"
 DEFAULT_LOCK_PATH = "/run/smb-sync.lock"
 
+_WARNING_REPEAT_SECONDS = 3600.0
+
 
 class WarningRepeat:
-    def __init__(
-        self,
-        interval: float = 3600.0,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._interval = interval
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
         self._logged_at: dict[str, float] = {}
 
@@ -36,7 +33,7 @@ class WarningRepeat:
         due = []
         for warning in warnings:
             last = logged_at.get(warning)
-            if last is None or now - last >= self._interval:
+            if last is None or now - last >= _WARNING_REPEAT_SECONDS:
                 logged_at[warning] = now
                 due.append(warning)
         self._logged_at = logged_at
@@ -103,7 +100,6 @@ def run_cycle(
         api,
         smb_host=cfg.smb_host,
         share_name=cfg.share_name,
-        upload=actual.token_user is not None and actual.token_user.is_superuser,
     )
     return failures == 0
 
@@ -168,15 +164,12 @@ def run_daemon(
 
 def restore_unix_accounts(system: SystemAdapter, uid_base: int) -> int:
     failures = 0
-    for account in system.list_samba_accounts():
-        uid = counted_uid(account, uid_base)
-        if uid is None:
-            continue
+    for account in counted_accounts(system.list_samba_accounts(), uid_base):
         # a rename that stopped before its last step leaves two entries with
         # one uid, and useradd refuses the second, so one failure must not
         # lock out the entries after it
         try:
-            system.create_unix_user(account.username, uid)
+            system.create_unix_user(account.username, account.uid)
         except CommandError as exc:
             log.error(
                 "could not restore the unix account of '%s': %s", account.username, exc

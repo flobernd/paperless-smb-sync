@@ -15,7 +15,8 @@ from .model import InboxFolder, SambaAccount
 # constant.
 INBOX_ROOT = "/shares/inbox"
 
-_STORED_UID = re.compile(r"smb-sync uid=([0-9]+)")
+_UID_MARK = "smb-sync uid="
+_STORED_UID = re.compile(re.escape(_UID_MARK) + r"([0-9]+)")
 
 
 class CommandError(Exception):
@@ -92,16 +93,15 @@ class SystemAdapter:
         return {entry.pw_name: entry.pw_uid for entry in pwd.getpwall()}
 
     def list_inbox_folders(self) -> list[InboxFolder]:
-        folders = []
         with (
             _command_error(f"cannot list inbox folders in '{self._inbox}'"),
             os.scandir(self._inbox) as entries,
         ):
-            for entry in entries:
-                if entry.is_dir(follow_symlinks=False):
-                    folders.append(
-                        InboxFolder(name=entry.name, uid=entry.stat().st_uid)
-                    )
+            folders = [
+                InboxFolder(name=entry.name, uid=entry.stat().st_uid)
+                for entry in entries
+                if entry.is_dir(follow_symlinks=False)
+            ]
         return folders
 
     # -- unix accounts -----------------------------------------------
@@ -159,7 +159,7 @@ class SystemAdapter:
         self._run(["smbpasswd", "-e", username])
 
     def store_uid(self, username: str, uid: int) -> None:
-        self._run(["pdbedit", "-r", "-u", username, "-N", f"smb-sync uid={uid}"])
+        self._run(["pdbedit", "-r", "-u", username, "-N", f"{_UID_MARK}{uid}"])
 
     def rename_samba_account(self, old: str, new: str, uid: int) -> None:
         # tdbsam cannot rename in place, so the hash line is re-imported

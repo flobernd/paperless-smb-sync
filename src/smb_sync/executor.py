@@ -33,9 +33,8 @@ def execute(
     *,
     smb_host: str,
     share_name: str,
-    upload: bool,
 ) -> int:
-    announce = partial(_announce_credentials, api, smb_host, share_name, upload)
+    announce = partial(_announce_credentials, api, smb_host, share_name)
     failures = 0
     for action in actions:
         try:
@@ -52,9 +51,9 @@ def _announce_credentials(
     api: PaperlessClient,
     smb_host: str,
     share_name: str,
-    upload: bool,
     user: PaperlessUser,
     password: str,
+    upload: bool,
 ) -> None:
     print(credentials_block(smb_host, share_name, user.username, password), flush=True)
     if not upload:
@@ -77,15 +76,15 @@ def _apply(
     action: Action,
     system: SystemAdapter,
     api: PaperlessClient,
-    announce: Callable[[PaperlessUser, str], None],
+    announce: Callable[[PaperlessUser, str, bool], None],
 ) -> None:
     match action:
-        case CreateAccount(user=user, uid=uid):
+        case CreateAccount(user=user, uid=uid, upload=upload):
             system.create_unix_user(user.username, uid)
             password = generate_password()
             system.set_samba_password(user.username, password, create=True)
             log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
-            announce(user, password)
+            announce(user, password, upload)
             # the stored uid marks the creation as finished, so it waits until
             # the password went out
             system.store_uid(user.username, uid)

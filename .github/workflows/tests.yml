@@ -1,0 +1,33 @@
+name: Tests
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 -m venv .venv
+      - run: .venv/bin/pip install -e '.[dev]'
+      - run: .venv/bin/python -m pytest -q
+      - run: shellcheck docker/entrypoint.sh tests/smoke/run.sh
+  tests:
+    name: Tests
+    needs: [unit]
+    # Branch protection requires the check of a job, so this job is the one check to require. It runs after any
+    # result of unit and fails unless unit passed, so a canceled or skipped unit blocks the merge too.
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          UNIT: ${{ needs.unit.result }}
+        run: test "$UNIT" = success

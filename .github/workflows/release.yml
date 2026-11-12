@@ -1,0 +1,339 @@
+name: Release
+on:
+  # A pull request that touches the inputs of the image builds amd64 without a push, so a broken Dockerfile fails
+  # before a release runs it.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - Dockerfile
+      - docker/**
+      - pyproject.toml
+      - src/**
+      - tests/smoke/**
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+  # The weekly run rebuilds the latest release and main from their unchanged source and moves their tags, the version
+  # tags included, to the new images. The Dockerfile upgrades the Debian packages at build time, so this rebuild is how
+  # a user who stays on a release gets the package updates.
+  schedule:
+    - cron: "17 4 * * 1"
+  # A manual run proves the arm64 build too, which a pull request skips, and it pushes nothing.
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+# A named bash shell runs with pipefail, so a failed command before a pipe stops its step.
+defaults:
+  run:
+    shell: bash
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      platforms: ${{ steps.decide.outputs.platforms }}
+      push: ${{ steps.decide.outputs.push }}
+      registry_image: ${{ steps.decide.outputs.registry_image }}
+      targets: ${{ steps.decide.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version_of() {
+            local found
+            found=$(sed -n 's/^version = "\([^"]*\)"$/\1/p')
+            if ! { [ -n "$found" ] && [ "$(printf '%s\n' "$found" | wc -l)" = 1 ]; }; then
+              echo "pyproject.toml at $1 has no single version line" >&2
+              return 1
+            fi
+            printf '%s\n' "$found"
+          }
+          targets='[]'
+          # A target names a commit, since each job checks out its target by itself and a branch or a tag can move
+          # during the run.
+          add_target() {
+            targets=$(jq -c --arg kind "$1" --arg ref "$2" --arg version "$3" \
+              '. + [{$kind, $ref, $version}]' <<< "$targets")
+          }
+          add_release() {
+            local tag=$1 commit tagged
+            # The form that metadata-action parses. It drops a version that it cannot parse without a failure, and
+            # latest would still move.
+            local re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+            if ! [[ $tag =~ $re ]]; then
+              echo "release tag '$tag' is not X.Y.Z or X.Y.Z-suffix" >&2
+              exit 1
+            fi
+            # FETCH_HEAD keeps the fetch out of refs/tags, where the checkout of a release can hold the tag as a
+            # plain commit that a fetch of the annotated tag would refuse to replace.
+            git fetch --depth=1 --no-tags origin "refs/tags/$tag"
+            commit=$(git rev-parse 'FETCH_HEAD^{commit}')
+            tagged=$(git show "$commit:pyproject.toml" | version_of "the tag $tag")
+            if [ "$tag" != "$tagged" ]; then
+              echo "release tag '$tag' differs from the version '$tagged' in its pyproject.toml" >&2
+              exit 1
+            fi
+            add_target release "$commit" "$tag"
+          }
+          version=$(version_of "$GITHUB_SHA" < pyproject.toml)
+          amd64='{"platform":"linux/amd64","runner":"ubuntu-24.04","slug":"linux-amd64"}'
+          arm64='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","slug":"linux-arm64"}'
+          platforms="[$amd64,$arm64]"
+          push=true
+          case "$EVENT" in
+            pull_request)
+              add_target check "$GITHUB_SHA" "$version"
+              platforms="[$amd64]"
+              push=false
+              ;;
+            push)
+              add_target edge "$GITHUB_SHA" "$version"
+              ;;
+            release)
+              add_release "$TAG"
+              ;;
+            schedule)
+              # A failed request stops the run. Only the answer that no release exists leaves the release out.
+              if tag=$(gh release view --json tagName --jq .tagName --repo "$GITHUB_REPOSITORY" \
+                2> "$RUNNER_TEMP/release.err"); then
+                add_release "$tag"
+              elif [ "$(cat "$RUNNER_TEMP/release.err")" != "release not found" ]; then
+                cat "$RUNNER_TEMP/release.err" >&2
+                exit 1
+              fi
+              add_target edge "$GITHUB_SHA" "$version"
+              ;;
+            workflow_dispatch)
+              add_target check "$GITHUB_SHA" "$version"
+              push=false
+              ;;
+            *)
+              echo "the event '$EVENT' has no targets" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "platforms=$platforms"
+            echo "push=$push"
+            # ghcr.io accepts lower-case names only, and GITHUB_REPOSITORY keeps the spelling of the owner.
+            echo "registry_image=ghcr.io/${GITHUB_REPOSITORY,,}"
+            echo "targets=$targets"
+          } >> "$GITHUB_OUTPUT"
+  build:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.guard.outputs.platforms) }}
+        target: ${{ fromJSON(needs.guard.outputs.targets) }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 30
+    # With a push, this job sends the image of each platform to the registry by digest. The permissions of a job cannot
+    # follow the event, so the build of a pull request holds the write scope too, on a path that never logs in or
+    # pushes.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.ref }}
+      # The revision comes from the checkout, because the weekly run builds the tag of a release while its event
+      # names the commit of main.
+      - id: commit
+        run: |
+          revision=$(git rev-parse HEAD)
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - if: needs.guard.outputs.push == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # A build that pushes takes no cached layer and pulls the base image anew. A cached layer would hold the
+          # Debian packages of an older build, and the weekly run exists to pick up their updates.
+          cache-from: >-
+            ${{ needs.guard.outputs.push != 'true'
+            && format('type=gha,scope={0}', matrix.platform.slug) || '' }}
+          cache-to: >-
+            ${{ needs.guard.outputs.push != 'true'
+            && format('type=gha,scope={0},mode=max', matrix.platform.slug) || '' }}
+          context: .
+          labels: |
+            org.opencontainers.image.revision=${{ steps.commit.outputs.revision }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          no-cache: ${{ needs.guard.outputs.push == 'true' }}
+          outputs: >-
+            ${{ needs.guard.outputs.push == 'true'
+            && 'type=image,push-by-digest=true,name-canonical=true,push=true'
+            || 'type=docker,dest=/tmp/paperless-smb-sync.tar' }}
+          platforms: ${{ matrix.platform.platform }}
+          # The docker exporter takes no attestation manifests, so a build without a push makes none.
+          provenance: ${{ needs.guard.outputs.push == 'true' && 'mode=max' || 'false' }}
+          pull: ${{ needs.guard.outputs.push == 'true' }}
+          sbom: ${{ needs.guard.outputs.push == 'true' }}
+          tags: >-
+            ${{ needs.guard.outputs.push == 'true'
+            && needs.guard.outputs.registry_image || 'paperless-smb-sync:smoke' }}
+      - if: needs.guard.outputs.push == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+      - if: needs.guard.outputs.push == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: digest-${{ matrix.target.kind }}-${{ matrix.platform.slug }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+      - if: needs.guard.outputs.push != 'true' && matrix.platform.slug == 'linux-amd64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: image-${{ matrix.target.kind }}-linux-amd64
+          path: /tmp/paperless-smb-sync.tar
+          retention-days: 1
+  unit:
+    # The publish waits for this job. A release and a weekly run start no run of the Tests workflow, and the run that
+    # a push to main starts is one the publish would not wait for.
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.guard.outputs.targets) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.ref }}
+      - run: python3 -m venv .venv
+      - run: .venv/bin/pip install -e '.[dev]'
+      - run: .venv/bin/python -m pytest -q
+      - run: shellcheck docker/entrypoint.sh tests/smoke/run.sh
+  smoke:
+    needs: [guard, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.guard.outputs.targets) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # With a push, the smoke pulls the amd64 digest that the build sent, so the amd64 image that gets the tags is the
+    # one that passed.
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.target.ref }}
+      - if: needs.guard.outputs.push == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - if: needs.guard.outputs.push == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: digest-${{ matrix.target.kind }}-linux-amd64
+          path: ${{ runner.temp }}/digests
+      - if: needs.guard.outputs.push != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-${{ matrix.target.kind }}-linux-amd64
+          path: ${{ runner.temp }}
+      - id: image
+        env:
+          IMAGE: ${{ needs.guard.outputs.registry_image }}
+          PUSH: ${{ needs.guard.outputs.push }}
+        run: |
+          if [ "$PUSH" = true ]; then
+            ref="$IMAGE@sha256:$(ls "$RUNNER_TEMP/digests")"
+            docker pull "$ref"
+          else
+            docker load -i "$RUNNER_TEMP/paperless-smb-sync.tar"
+            ref=paperless-smb-sync:smoke
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+      - env:
+          SMOKE_IMAGE: ${{ steps.image.outputs.ref }}
+        run: tests/smoke/run.sh
+  publish:
+    if: needs.guard.outputs.push == 'true'
+    needs: [guard, smoke, unit]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.guard.outputs.targets) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.guard.outputs.registry_image }}
+      KIND: ${{ matrix.target.kind }}
+      VERSION: ${{ matrix.target.version }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+          pattern: digest-${{ matrix.target.kind }}-*
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          # The major tag alone would name 0.x releases that break each other. The semver type gives a prerelease its
+          # version tag alone, and latest never names one.
+          flavor: latest=false
+          images: ${{ needs.guard.outputs.registry_image }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ env.KIND == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ env.KIND == 'release' }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }},enable=${{ env.KIND == 'release' && !startsWith(env.VERSION, '0.') }}
+            type=raw,value=latest,enable=${{ env.KIND == 'release' && !contains(env.VERSION, '-') }}
+            type=raw,value=edge,enable=${{ env.KIND == 'edge' }}
+      - env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          # metadata-action drops a version that it cannot parse without a failure, and latest must not move without
+          # the version tag.
+          if [ "$KIND" = release ] && ! grep -qxF "$IMAGE:$VERSION" <<< "$TAGS"; then
+            echo "the tags for $VERSION lack $IMAGE:$VERSION, so no tag moves" >&2
+            exit 1
+          fi
+          args=()
+          while IFS= read -r tag; do [ -n "$tag" ] && args+=(-t "$tag"); done <<< "$TAGS"
+          refs=()
+          for digest in *; do refs+=("$IMAGE@sha256:$digest"); done
+          docker buildx imagetools create "${args[@]}" "${refs[@]}"
+      - env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          docker buildx imagetools inspect "$(head -n 1 <<< "$TAGS")" --format '{{json .Manifest}}' \
+            | jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | unique
+                     | contains(["amd64", "arm64"])'

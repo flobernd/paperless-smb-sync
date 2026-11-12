@@ -4,6 +4,13 @@ set -eu
 : "${PAPERLESS_GID:=10000}"
 : "${SHARE_NAME:=inbox}"
 
+# the loop below restarts a daemon that fails forever, so a bad setting would
+# otherwise leave smbd running beside a daemon that never syncs
+if ! smb-sync check; then
+    echo "smb-sync configuration is not valid, refusing to start" >&2
+    exit 1
+fi
+
 if ! getent group paperless >/dev/null; then
     groupadd --gid "$PAPERLESS_GID" paperless
 fi
@@ -11,6 +18,7 @@ fi
 mkdir -p /shares/inbox /run/samba /etc/samba/conf.d
 
 export SHARE_NAME
+# shellcheck disable=SC2016 # envsubst takes the name literally and replaces only that variable
 envsubst '${SHARE_NAME}' </etc/samba/smb.conf.template >/etc/samba/smb.conf
 
 # Appended after the managed share so a [global] header in a drop-in re-opens
@@ -37,6 +45,13 @@ case "$parse" in
         exit 1
         ;;
 esac
+
+# passdb is on the volume, but the unix accounts that smbd needs for a login
+# are gone after a recreation of the container. A failure does not stop the
+# start, since the first cycle repairs what is left.
+if ! smb-sync restore; then
+    echo "could not restore every unix account from passdb" >&2
+fi
 
 (
     while true; do

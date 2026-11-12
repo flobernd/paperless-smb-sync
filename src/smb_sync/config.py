@@ -35,7 +35,7 @@ class Config:
 
 
 def _read_token(env: Mapping[str, str]) -> str:
-    token = env.get("PAPERLESS_API_TOKEN", "")
+    token = env.get("PAPERLESS_API_TOKEN", "").strip()
     token_file = env.get("PAPERLESS_API_TOKEN_FILE", "")
     if token and token_file:
         raise ValueError(
@@ -43,7 +43,10 @@ def _read_token(env: Mapping[str, str]) -> str:
         )
     if token_file:
         with open(token_file, encoding="utf-8") as fh:
-            return fh.read().strip()
+            token = fh.read().strip()
+        if not token:
+            raise ValueError("PAPERLESS_API_TOKEN_FILE holds no token")
+        return token
     if token:
         return token
     raise ValueError("PAPERLESS_API_TOKEN or PAPERLESS_API_TOKEN_FILE is required")

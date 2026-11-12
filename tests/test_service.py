@@ -1,13 +1,21 @@
 import fcntl
 import logging
+import os
 from dataclasses import replace
 
 import pytest
 
 from smb_sync.config import Config, MailConfig
-from smb_sync.model import PaperlessUser
+from smb_sync.model import PaperlessUser, SambaAccount
 from smb_sync.paperless import PaperlessError
-from smb_sync.service import WarningRepeat, run_cycle, run_cycle_locked, run_daemon
+from smb_sync.service import (
+    WarningRepeat,
+    heartbeat_is_fresh,
+    restore_unix_accounts,
+    run_cycle,
+    run_cycle_locked,
+    run_daemon,
+)
 from smb_sync.system import CommandError
 
 NO_MAIL = MailConfig(
@@ -54,14 +62,16 @@ class FakeApi:
 
 
 class FakeSystem:
-    def __init__(self, fail_listing=False):
+    def __init__(self, fail_listing=False, accounts=(), fail_user=None):
         self.fail_listing = fail_listing
+        self.accounts = accounts
+        self.fail_user = fail_user
         self.calls = []
 
     def list_samba_accounts(self):
         if self.fail_listing:
             raise CommandError("pdbedit broken")
-        return []
+        return list(self.accounts)
 
     def list_inbox_folders(self):
         return []
@@ -70,6 +80,8 @@ class FakeSystem:
         return {}
 
     def create_unix_user(self, username, uid):
+        if username == self.fail_user:
+            raise CommandError(f"uid {uid} is taken")
         self.calls.append(("create_unix_user", username, uid))
 
     def set_samba_password(self, username, password, create=False):
@@ -152,8 +164,13 @@ def test_daemon_survives_cycle_crash(monkeypatch, tmp_path):
     monkeypatch.setattr("smb_sync.service.time.sleep", stop)
     with pytest.raises(StopLoop):
         run_daemon(
-            CFG, CrashingApi(), FakeSystem(), lock_path=str(tmp_path / "lock")
+            CFG,
+            CrashingApi(),
+            FakeSystem(),
+            lock_path=str(tmp_path / "lock"),
+            heartbeat_path=str(tmp_path / "heartbeat"),
         )
+    assert (tmp_path / "heartbeat").exists()
 
 
 def test_standing_warning_is_due_again_after_the_interval():
@@ -182,7 +199,13 @@ def test_daemon_logs_a_standing_warning_once(monkeypatch, tmp_path, caplog):
 
     monkeypatch.setattr("smb_sync.service.time.sleep", sleep)
     with caplog.at_level(logging.WARNING), pytest.raises(StopLoop):
-        run_daemon(CFG, ChangingApi(), FakeSystem(), lock_path=str(tmp_path / "lock"))
+        run_daemon(
+            CFG,
+            ChangingApi(),
+            FakeSystem(),
+            lock_path=str(tmp_path / "lock"),
+            heartbeat_path=str(tmp_path / "heartbeat"),
+        )
     assert caplog.text.count("'Bad Name'") == 1
     assert caplog.text.count("'Other Bad'") == 1
 
@@ -222,3 +245,79 @@ def test_nothing_is_emailed_when_mail_is_disabled(monkeypatch, capsys):
     api = FakeApi(users=[PaperlessUser(5, "alice", True, "alice@example.com")])
     assert run_cycle(CFG, api, FakeSystem()) is True
     assert sent == []
+
+
+def test_restore_makes_unix_accounts_for_counted_entries_only():
+    system = FakeSystem(
+        accounts=[
+            SambaAccount("alice", 20005, True),
+            SambaAccount("desk", None, True),
+            SambaAccount("low", 19999, True),
+        ]
+    )
+    assert restore_unix_accounts(system, 20000) == 0
+    assert system.calls == [("create_unix_user", "alice", 20005)]
+
+
+def test_restore_continues_after_one_entry_fails():
+    system = FakeSystem(
+        accounts=[SambaAccount("alice", 20005, True), SambaAccount("bob", 20006, True)],
+        fail_user="alice",
+    )
+    assert restore_unix_accounts(system, 20000) == 1
+    assert ("create_unix_user", "bob", 20006) in system.calls
+
+
+def test_daemon_touches_the_heartbeat_after_a_failed_cycle(monkeypatch, tmp_path):
+    heartbeat = tmp_path / "heartbeat"
+
+    def stop(_seconds):
+        raise StopLoop()
+
+    monkeypatch.setattr("smb_sync.service.time.sleep", stop)
+    with pytest.raises(StopLoop):
+        run_daemon(
+            CFG,
+            FakeApi(fail=True),
+            FakeSystem(),
+            lock_path=str(tmp_path / "lock"),
+            heartbeat_path=str(heartbeat),
+        )
+    assert heartbeat.exists()
+
+
+def test_daemon_drops_the_heartbeat_of_an_earlier_run(monkeypatch, tmp_path):
+    heartbeat = tmp_path / "heartbeat"
+    heartbeat.touch()
+    seen = []
+
+    class WatchingApi(FakeApi):
+        def fetch_desired_users(self, group_name):
+            seen.append(heartbeat.exists())
+            return []
+
+    def stop(_seconds):
+        raise StopLoop()
+
+    monkeypatch.setattr("smb_sync.service.time.sleep", stop)
+    with pytest.raises(StopLoop):
+        run_daemon(
+            CFG,
+            WatchingApi(),
+            FakeSystem(),
+            lock_path=str(tmp_path / "lock"),
+            heartbeat_path=str(heartbeat),
+        )
+    assert seen == [False]
+
+
+def test_heartbeat_goes_stale_after_three_intervals_or_three_minutes(tmp_path):
+    path = tmp_path / "heartbeat"
+    assert heartbeat_is_fresh(str(path), 100, now=1000.0) is False
+    path.touch()
+    os.utime(path, (1000.0, 1000.0))
+    assert heartbeat_is_fresh(str(path), 100, now=1300.0) is True
+    assert heartbeat_is_fresh(str(path), 100, now=1301.0) is False
+    # one request to a paperless that hangs takes 30 s, so a short interval keeps a floor of 180 s
+    assert heartbeat_is_fresh(str(path), 5, now=1180.0) is True
+    assert heartbeat_is_fresh(str(path), 5, now=1181.0) is False

@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import time
 from functools import partial
 
 from .config import Config, config_warnings, load_config
@@ -9,7 +10,14 @@ from .mail import deliver_credentials, send_credentials
 from .model import ActualState, PaperlessUser, Plan, RenameUser
 from .paperless import PaperlessClient, PaperlessError
 from .planner import counted_accounts, plan_cycle
-from .service import observe, run_cycle_locked, run_daemon
+from .service import (
+    DEFAULT_HEARTBEAT_PATH,
+    heartbeat_is_fresh,
+    observe,
+    restore_unix_accounts,
+    run_cycle_locked,
+    run_daemon,
+)
 from .system import INBOX_ROOT, CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
@@ -20,13 +28,18 @@ def build_parser() -> argparse.ArgumentParser:
         prog="smb-sync", description="Sync paperless-ngx users to Samba"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("run", help="run the sync daemon")
-    sub.add_parser("sync", help="run one reconcile cycle now")
-    sub.add_parser("status", help="show managed users")
+    sub.add_parser("check", help="check the configuration")
+    sub.add_parser("health", help="check that the sync loop finished a cycle recently")
     regen = sub.add_parser(
         "regen", help="set a new password for a user and print it once"
     )
     regen.add_argument("username")
+    sub.add_parser(
+        "restore", help="make the unix accounts of the managed samba entries"
+    )
+    sub.add_parser("run", help="run the sync daemon")
+    sub.add_parser("status", help="show managed users")
+    sub.add_parser("sync", help="run one reconcile cycle now")
     return parser
 
 
@@ -145,12 +158,32 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stdout,
     )
     args = build_parser().parse_args(argv)
-    cfg = load_config()
-    for warning in config_warnings(cfg):
-        log.warning("%s", warning)
+    try:
+        cfg = load_config()
+    except (OSError, ValueError) as exc:
+        print(f"smb-sync: {exc}", file=sys.stderr)
+        return 2
     api = PaperlessClient(cfg.paperless_url, cfg.paperless_token, cfg.consume_path)
     system = SystemAdapter(INBOX_ROOT, cfg.paperless_gid)
 
+    if args.command == "check":
+        return 0
+    if args.command == "health":
+        fresh = heartbeat_is_fresh(
+            DEFAULT_HEARTBEAT_PATH, cfg.poll_interval, time.time()
+        )
+        return 0 if fresh else 1
+    if args.command == "restore":
+        try:
+            failures = restore_unix_accounts(system, cfg.uid_base)
+        except CommandError as exc:
+            print(f"smb-sync: {exc}", file=sys.stderr)
+            return 1
+        return 0 if failures == 0 else 1
+    # the start runs check and restore, and Docker runs health every 30 s, so
+    # only the commands below log the warnings
+    for warning in config_warnings(cfg):
+        log.warning("%s", warning)
     if args.command == "run":
         run_daemon(cfg, api, system)
         return 0

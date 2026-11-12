@@ -78,6 +78,17 @@ def test_token_file(tmp_path):
     assert cfg.paperless_token == "filetok"
 
 
+def test_blank_token_raises(tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text("\n")
+    with pytest.raises(ValueError, match="PAPERLESS_API_TOKEN"):
+        load_config(
+            {"PAPERLESS_URL": "http://x", "PAPERLESS_API_TOKEN_FILE": str(token_file)}
+        )
+    with pytest.raises(ValueError, match="PAPERLESS_API_TOKEN"):
+        load_config({"PAPERLESS_URL": "http://x", "PAPERLESS_API_TOKEN": "   "})
+
+
 def test_mail_settings_come_from_the_paperless_variables():
     cfg = load_config(
         {

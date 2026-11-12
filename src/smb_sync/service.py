@@ -1,19 +1,22 @@
 import fcntl
 import logging
+import os
 import time
 from collections.abc import Callable, Sequence
 from functools import partial
+from pathlib import Path
 
 from .config import Config
 from .executor import execute
 from .mail import send_credentials
 from .model import ActualState, PaperlessUser
 from .paperless import PaperlessClient, PaperlessError
-from .planner import plan_cycle
+from .planner import counted_accounts, plan_cycle
 from .system import CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
 
+DEFAULT_HEARTBEAT_PATH = "/run/smb-sync.heartbeat"
 DEFAULT_LOCK_PATH = "/run/smb-sync.lock"
 
 
@@ -100,11 +103,22 @@ def run_cycle_locked(
         return run_cycle(cfg, api, system, repeat=repeat)
 
 
+def heartbeat_is_fresh(path: str, poll_interval: int, now: float) -> bool:
+    try:
+        modified = os.stat(path).st_mtime
+    except FileNotFoundError:
+        return False
+    # each request to a paperless that hangs waits 30 s, which can outlast
+    # three short poll intervals
+    return now - modified <= max(3 * poll_interval, 180)
+
+
 def run_daemon(
     cfg: Config,
     api: PaperlessClient,
     system: SystemAdapter,
     lock_path: str = DEFAULT_LOCK_PATH,
+    heartbeat_path: str = DEFAULT_HEARTBEAT_PATH,
 ) -> None:
     log.info(
         "sync loop started (interval %ds, group '%s')",
@@ -112,9 +126,39 @@ def run_daemon(
         cfg.sync_group,
     )
     repeat = WarningRepeat()
+    # after docker restart, the file of the earlier run would read fresh while
+    # the first cycle hangs
+    try:
+        Path(heartbeat_path).unlink(missing_ok=True)
+    except OSError as exc:
+        log.error("could not remove the heartbeat file '%s': %s", heartbeat_path, exc)
     while True:
         try:
             run_cycle_locked(cfg, api, system, lock_path=lock_path, repeat=repeat)
         except Exception:
             log.exception("cycle crashed")
+        # the heartbeat follows a failed cycle too, so an unreachable paperless
+        # does not mark the container unhealthy
+        try:
+            Path(heartbeat_path).touch()
+        except OSError as exc:
+            log.error(
+                "could not write the heartbeat file '%s': %s", heartbeat_path, exc
+            )
         time.sleep(cfg.poll_interval)
+
+
+def restore_unix_accounts(system: SystemAdapter, uid_base: int) -> int:
+    failures = 0
+    for account in counted_accounts(system.list_samba_accounts(), uid_base):
+        # a rename that stopped before its last step leaves two entries with
+        # one uid, and useradd refuses the second, so one failure must not
+        # lock out the entries after it
+        try:
+            system.create_unix_user(account.username, account.uid)
+        except CommandError as exc:
+            log.error(
+                "could not restore the unix account of '%s': %s", account.username, exc
+            )
+            failures += 1
+    return failures

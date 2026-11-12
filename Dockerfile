@@ -1,13 +1,14 @@
 FROM debian:trixie-slim
 
 RUN apt-get update \
+    && apt-get -y upgrade \
     && apt-get install -y --no-install-recommends \
-        samba \
-        smbclient \
+        gettext-base \
         python3 \
         python3-requests \
+        samba \
+        smbclient \
         tini \
-        gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
 COPY src/smb_sync /opt/smb-sync/smb_sync
@@ -18,5 +19,7 @@ RUN chmod +x /usr/local/bin/smb-sync /entrypoint.sh
 
 EXPOSE 445
 VOLUME /var/lib/samba
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 CMD ["smb-sync", "health"]
 
 ENTRYPOINT ["tini", "--", "/entrypoint.sh"]

@@ -67,8 +67,18 @@ has_workflow() {
     jq -e --arg name "[smb-sync] $1" 'any(.results[]; .name == $name)' \
         <<<"$workflows" >/dev/null
 }
+account_renamed() { has_account "$2" && lacks_account "$1"; }
+smb_healthy() {
+    local status
+    status=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q smb)") \
+        || return
+    [ "$status" = healthy ]
+}
 
-cleanup() { compose down -v --remove-orphans >/dev/null 2>&1 || true; }
+cleanup() {
+    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    docker rm -f -v smb-sync-smoke-check >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
 cleanup
 
@@ -76,6 +86,14 @@ if [ -z "${SMOKE_IMAGE:-}" ]; then
     echo "== building the image =="
     docker build -t paperless-smb-sync:smoke ../..
     export SMOKE_IMAGE=paperless-smb-sync:smoke
+fi
+
+echo "== asserting that a container without a token stops =="
+docker run -d --name smb-sync-smoke-check -e PAPERLESS_URL=http://paperless:8000 \
+    "$SMOKE_IMAGE" >/dev/null || fail "could not start the check container"
+CODE=$(timeout 60 docker wait smb-sync-smoke-check) || true
+if [ -z "$CODE" ] || [ "$CODE" = 0 ]; then
+    fail "the container without a token did not stop with an error"
 fi
 
 echo "== starting paperless =="
@@ -161,5 +179,18 @@ lacks_account carol || fail "samba account not removed"
 if compose exec -T smb test -e /shares/inbox/carol; then fail "folder not removed"; fi
 WORKFLOWS=$(api "$API/api/workflows/" | jq -r '.results[].name') || fail "could not list workflows"
 if grep -qx '\[smb-sync\] carol' <<<"$WORKFLOWS"; then fail "workflow not removed"; fi
+
+echo "== asserting a login after a recreation without paperless =="
+api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"username":"erin"}' >/dev/null
+wait_for "samba account of dave was not renamed to erin" account_renamed dave erin
+compose stop paperless
+compose up -d --force-recreate --no-deps smb
+# shellcheck disable=SC2016 # $SMBPASS expands in the shell of the container
+wait_for "erin could not log in after the recreation" \
+    compose exec -T -e SMBPASS="$DAVE_PASSWORD" smb \
+    sh -c 'smbclient //localhost/inbox -U "erin%$SMBPASS" -c ls'
+# wait_for allows about two minutes, more than the start period of the health
+# check plus one interval
+wait_for "the smb container did not become healthy" smb_healthy
 
 echo "SMOKE TEST PASSED"

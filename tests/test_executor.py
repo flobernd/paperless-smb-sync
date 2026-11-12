@@ -159,7 +159,11 @@ def test_removal_stops_at_the_first_failed_step():
     failures, system, api = run(
         [
             Deprovision(
-                username="alice", workflow_id=7, delete_folder=True, documents=None
+                username="alice",
+                user_id=5,
+                workflow_id=7,
+                delete_folder=True,
+                documents=None,
             )
         ],
         system=system,
@@ -173,7 +177,11 @@ def test_removal_without_the_folder_flag_leaves_the_folder():
     failures, system, api = run(
         [
             Deprovision(
-                username="alice", workflow_id=None, delete_folder=False, documents=None
+                username="alice",
+                user_id=5,
+                workflow_id=None,
+                delete_folder=False,
+                documents=None,
             )
         ]
     )
@@ -196,7 +204,11 @@ def test_removal_closes_the_login_before_the_workflow_step():
     failures, system, _ = run(
         [
             Deprovision(
-                username="alice", workflow_id=7, delete_folder=True, documents=None
+                username="alice",
+                user_id=5,
+                workflow_id=7,
+                delete_folder=True,
+                documents=None,
             )
         ],
         api=api,
@@ -209,14 +221,18 @@ def test_a_failed_document_purge_keeps_the_entry():
     # while the entry exists, the next cycle tries the removal again
     api = FakeApi()
 
-    def refuse(username, document_ids):
+    def refuse(username, user_id, document_ids):
         raise PaperlessError("HTTP 500")
 
     api.delete_credentials = refuse
     failures, system, _ = run(
         [
             Deprovision(
-                username="alice", workflow_id=None, delete_folder=True, documents=(40,)
+                username="alice",
+                user_id=5,
+                workflow_id=None,
+                delete_folder=True,
+                documents=(40,),
             )
         ],
         api=api,

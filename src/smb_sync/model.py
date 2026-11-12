@@ -92,6 +92,7 @@ class DeleteWorkflow:
 @dataclass(frozen=True)
 class Deprovision:
     username: str
+    user_id: int
     workflow_id: int | None
     delete_folder: bool
     documents: tuple[int, ...] | None

@@ -154,7 +154,11 @@ def test_stale_account_keeps_a_folder_of_another_uid():
     plan = planned([], actual)
     assert plan.actions == (
         Deprovision(
-            username="alice", workflow_id=None, delete_folder=False, documents=None
+            username="alice",
+            user_id=5,
+            workflow_id=None,
+            delete_folder=False,
+            documents=None,
         ),
     )
 
@@ -171,7 +175,13 @@ def test_at_most_one_deprovision_per_cycle():
     plan = planned([], actual)
     removals = [a for a in plan.actions if isinstance(a, Deprovision)]
     assert removals == [
-        Deprovision(username="alice", workflow_id=7, delete_folder=True, documents=None)
+        Deprovision(
+            username="alice",
+            user_id=5,
+            workflow_id=7,
+            delete_folder=True,
+            documents=None,
+        )
     ]
     assert any("bob" in w and "deferred" in w for w in plan.warnings)
     # the workflow of bob goes with his account, after his login closed
@@ -197,7 +207,11 @@ def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
     plan = planned(desired, actual)
     assert (
         Deprovision(
-            username="alice", workflow_id=None, delete_folder=False, documents=None
+            username="alice",
+            user_id=5,
+            workflow_id=None,
+            delete_folder=False,
+            documents=None,
         )
         in plan.actions
     )
@@ -216,7 +230,11 @@ def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
     plan = planned([], actual)
     assert plan.actions == (
         Deprovision(
-            username="bob", workflow_id=None, delete_folder=False, documents=None
+            username="bob",
+            user_id=6,
+            workflow_id=None,
+            delete_folder=False,
+            documents=None,
         ),
     )
     assert any("alice" in w for w in plan.warnings)
@@ -372,7 +390,11 @@ def test_stored_uid_below_the_range_does_not_count():
     plan = planned([], actual)
     assert plan.actions == (
         Deprovision(
-            username="edge", workflow_id=None, delete_folder=False, documents=None
+            username="edge",
+            user_id=0,
+            workflow_id=None,
+            delete_folder=False,
+            documents=None,
         ),
     )
     assert any("below" in w for w in plan.warnings)
@@ -500,7 +522,11 @@ def test_removal_takes_the_documents_of_that_account_only():
     )
     assert planned([], actual).actions == (
         Deprovision(
-            username="alice", workflow_id=7, delete_folder=True, documents=(40, 43)
+            username="alice",
+            user_id=5,
+            workflow_id=7,
+            delete_folder=True,
+            documents=(40, 43),
         ),
     )
 
@@ -518,7 +544,11 @@ def test_removal_of_an_old_name_leaves_the_documents_of_the_renamed_user():
     )
     assert planned(desired, actual).actions == (
         Deprovision(
-            username="alice", workflow_id=None, delete_folder=False, documents=None
+            username="alice",
+            user_id=5,
+            workflow_id=None,
+            delete_folder=False,
+            documents=None,
         ),
     )
 
@@ -539,7 +569,11 @@ def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
     )
     assert planned(desired, actual).actions == (
         Deprovision(
-            username="admin", workflow_id=None, delete_folder=False, documents=(40,)
+            username="admin",
+            user_id=1,
+            workflow_id=None,
+            delete_folder=False,
+            documents=(40,),
         ),
         HandOverDocument(document_id=41, user_id=6, username="bob"),
     )

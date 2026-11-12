@@ -113,6 +113,7 @@ def _apply(
             log.info("deleted workflow %d", workflow_id)
         case Deprovision(
             username=username,
+            user_id=user_id,
             workflow_id=workflow_id,
             delete_folder=delete_folder,
             documents=documents,
@@ -126,7 +127,7 @@ def _apply(
                 api.delete_workflow(workflow_id)
                 log.info("deleted workflow %d", workflow_id)
             if documents is not None:
-                api.delete_credentials(username, documents)
+                api.delete_credentials(username, user_id, documents)
                 log.info("deleted the credentials documents of '%s'", username)
             if delete_folder:
                 system.delete_inbox_folder(username)

@@ -380,6 +380,7 @@ def plan_cycle(
         actions.append(
             Deprovision(
                 username=name,
+                user_id=stale_accounts[name].uid - uid_base,
                 workflow_id=workflow.id if workflow else None,
                 delete_folder=inbox is not None
                 and inbox.uid == stale_accounts[name].uid

@@ -101,6 +101,18 @@ def _credential_document(record: dict[str, Any]) -> CredentialDocument | None:
     )
 
 
+def _of_user(document: CredentialDocument, username: str, user_id: int) -> bool:
+    # The name counts only for a document without an owner: paperless clears
+    # the owner when the user is deleted, and the title is then all that links
+    # the document to the account. A title can carry an earlier name of the
+    # user, or a name that another user has now.
+    return (
+        document.owner_id == user_id
+        or document.recipient_id == user_id
+        or (document.owner_id is None and document.username == username)
+    )
+
+
 def _block_file(block: str) -> dict[str, tuple[str, bytes, str]]:
     return {"document": (_CREDENTIALS_FILE, block.encode("utf-8"), "text/plain")}
 
@@ -244,7 +256,9 @@ class PaperlessClient:
             "POST", f"/api/documents/{document_id}/notes/", json={"note": note}
         )
 
-    def delete_credentials(self, username: str, document_ids: Sequence[int]) -> None:
+    def delete_credentials(
+        self, username: str, user_id: int, document_ids: Sequence[int]
+    ) -> None:
         for document_id in document_ids:
             self._trash_document(document_id)
         # the listing also finds what a removal that stopped after its DELETE
@@ -253,12 +267,13 @@ class PaperlessClient:
         records = self._get_all(path)
         with _unexpected_body(path):
             documents = [(r["id"], _credential_document(r)) for r in records]
-        # a document of the removal can still carry an earlier name of the user
+        # this call moved the selection to the trash, so its records count
+        # whatever they show now
         removed = set(document_ids)
         trashed = [
             i
             for i, d in documents
-            if i in removed or (d is not None and d.username == username)
+            if i in removed or (d is not None and _of_user(d, username, user_id))
         ]
         self._empty_trash(trashed)
 

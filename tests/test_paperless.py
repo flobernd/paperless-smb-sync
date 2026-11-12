@@ -330,16 +330,18 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
                         "owner": 5,
                         "original_file_name": UPLOAD,
                     },
+                    # an upload before its hand-over to user 5
                     {
                         "id": 41,
                         "title": "[smb-sync] credentials alice (user 5)",
                         "owner": 1,
                         "original_file_name": UPLOAD,
                     },
+                    # user 9 holds the name now
                     {
                         "id": 42,
-                        "title": "[smb-sync] credentials bob",
-                        "owner": 6,
+                        "title": "[smb-sync] credentials alice",
+                        "owner": 9,
                         "original_file_name": UPLOAD,
                     },
                     {
@@ -348,24 +350,34 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
                         "owner": 5,
                         "original_file_name": UPLOAD,
                     },
+                    # user 5 had the name dave before
                     {
                         "id": 44,
                         "title": "[smb-sync] credentials dave",
                         "owner": 5,
                         "original_file_name": UPLOAD,
                     },
+                    {
+                        "id": 45,
+                        "title": "[smb-sync] credentials alice",
+                        "owner": None,
+                        "original_file_name": UPLOAD,
+                    },
                 ]
             )
         }
     )
-    client.delete_credentials("alice", [40, 44])
+    client.delete_credentials("alice", 5, [40])
     assert session.requests == [
         ("DELETE", f"{BASE}/api/documents/40/", None),
-        ("DELETE", f"{BASE}/api/documents/44/", None),
-        ("POST", f"{BASE}/api/trash/", {"action": "empty", "documents": [40, 41, 44]}),
+        (
+            "POST",
+            f"{BASE}/api/trash/",
+            {"action": "empty", "documents": [40, 41, 44, 45]},
+        ),
     ]
-    client.delete_credentials("carol", [])
-    assert len(session.requests) == 3
+    client.delete_credentials("carol", 7, [])
+    assert len(session.requests) == 2
 
 
 def test_delete_document_also_empties_it_from_the_trash():

@@ -50,18 +50,41 @@ class PaperlessClient:
         self._session = session or requests.Session()
         self._session.headers["Authorization"] = f"Token {token}"
 
-    def _get_all(self, path: str) -> list[dict[str, Any]]:
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        tolerate: tuple[int, ...] = (),
+        **kwargs: Any,
+    ) -> requests.Response:
+        # the next link of a listing page comes back as an absolute URL
+        if path.startswith(("http://", "https://")):
+            url = path
+        else:
+            url = f"{self._base}{path}"
+        try:
+            response = self._session.request(method, url, timeout=_TIMEOUT, **kwargs)
+            if response.status_code not in tolerate:
+                response.raise_for_status()
+        except requests.RequestException as exc:
+            raise PaperlessError(f"{method} {url} failed: {exc}") from exc
+        return response
+
+    def _get_all(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> list[dict[str, Any]]:
         url: str | None = f"{self._base}{path}"
+        # the next link already carries the query of the first request
+        query: dict[str, str] | None = {"page_size": "1000", **(params or {})}
         results: list[dict[str, Any]] = []
         while url:
+            response = self._send("GET", url, params=query)
+            query = None
             try:
-                response = self._session.get(url, timeout=_TIMEOUT)
-                response.raise_for_status()
                 payload = response.json()
                 results.extend(payload["results"])
                 url = payload.get("next")
-            except requests.RequestException as exc:
-                raise PaperlessError(f"GET {url} failed: {exc}") from exc
             except (ValueError, KeyError, TypeError) as exc:
                 raise PaperlessError(
                     f"GET {url} returned an unexpected body: {exc}"
@@ -69,58 +92,55 @@ class PaperlessClient:
         return results
 
     def fetch_desired_users(self, group_name: str) -> list[PaperlessUser]:
-        groups = self._get_all("/api/groups/")
-        group = next((g for g in groups if g["name"] == group_name), None)
-        if group is None:
+        groups = self._get_all("/api/groups/", {"name__iexact": group_name})
+        # the server filter ignores case, so "SMB" comes back for "smb"
+        group_id = next((g["id"] for g in groups if g["name"] == group_name), None)
+        if group_id is None:
             raise PaperlessError(f"paperless group '{group_name}' does not exist")
-        users = self._get_all("/api/users/")
-        return [
-            PaperlessUser(
-                id=u["id"],
-                username=u["username"],
-                is_active=u["is_active"],
-                email=u.get("email", ""),
-            )
-            for u in users
-            if group["id"] in u["groups"]
-        ]
+        path = "/api/users/"
+        users = self._get_all(path)
+        try:
+            return [
+                PaperlessUser(
+                    id=u["id"],
+                    username=u["username"],
+                    is_active=u["is_active"],
+                    email=u.get("email", ""),
+                )
+                for u in users
+                if group_id in u["groups"]
+            ]
+        except (KeyError, TypeError) as exc:
+            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
 
     def fetch_managed_workflows(self) -> list[ManagedWorkflow]:
-        workflows = self._get_all("/api/workflows/")
-        return [
-            ManagedWorkflow(id=w["id"], username=w["name"][len(WORKFLOW_PREFIX) :])
-            for w in workflows
-            if w["name"].startswith(WORKFLOW_PREFIX)
-        ]
+        path = "/api/workflows/"
+        workflows = self._get_all(path)
+        try:
+            return [
+                ManagedWorkflow(
+                    id=w["id"], username=w["name"][len(WORKFLOW_PREFIX) :]
+                )
+                for w in workflows
+                if w["name"].startswith(WORKFLOW_PREFIX)
+            ]
+        except (KeyError, TypeError) as exc:
+            raise PaperlessError(f"{path} returned an unexpected body: {exc}") from exc
 
     def create_workflow(self, user_id: int, username: str) -> None:
-        url = f"{self._base}/api/workflows/"
-        try:
-            response = self._session.post(
-                url, json=_workflow_payload(user_id, username), timeout=_TIMEOUT
-            )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise PaperlessError(f"POST {url} failed: {exc}") from exc
+        self._send(
+            "POST", "/api/workflows/", json=_workflow_payload(user_id, username)
+        )
 
     def delete_workflow(self, workflow_id: int) -> None:
-        url = f"{self._base}/api/workflows/{workflow_id}/"
-        try:
-            response = self._session.delete(url, timeout=_TIMEOUT)
-            # a workflow already removed by hand is converged, not an error
-            if response.status_code != 404:
-                response.raise_for_status()
-        except requests.RequestException as exc:
-            raise PaperlessError(f"DELETE {url} failed: {exc}") from exc
+        # a workflow already removed by hand is converged, not an error
+        self._send("DELETE", f"/api/workflows/{workflow_id}/", tolerate=(404,))
 
     def rename_workflow(
         self, workflow_id: int, user_id: int, new_username: str
     ) -> None:
-        url = f"{self._base}/api/workflows/{workflow_id}/"
-        try:
-            response = self._session.put(
-                url, json=_workflow_payload(user_id, new_username), timeout=_TIMEOUT
-            )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise PaperlessError(f"PUT {url} failed: {exc}") from exc
+        self._send(
+            "PUT",
+            f"/api/workflows/{workflow_id}/",
+            json=_workflow_payload(user_id, new_username),
+        )

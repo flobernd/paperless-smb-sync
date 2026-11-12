@@ -36,20 +36,12 @@ class FakeSession:
         self.headers = {}
         self.requests = []
 
-    def get(self, url, timeout=None):
-        return self.routes[url]
-
-    def post(self, url, json=None, timeout=None):
-        self.requests.append(("POST", url, json))
-        return FakeResponse({}, 201)
-
-    def put(self, url, json=None, timeout=None):
-        self.requests.append(("PUT", url, json))
-        return FakeResponse({}, 200)
-
-    def delete(self, url, timeout=None):
-        self.requests.append(("DELETE", url, None))
-        return FakeResponse({}, self.delete_status)
+    def request(self, method, url, **kwargs):
+        if method == "GET":
+            return self.routes[url]
+        self.requests.append((method, url, kwargs.get("json")))
+        status = {"DELETE": self.delete_status, "POST": 201, "PUT": 200}[method]
+        return FakeResponse({}, status)
 
 
 BASE = "http://paperless:8000"
@@ -131,8 +123,35 @@ def test_missing_group_raises():
 
 
 def test_http_error_raises_paperless_error():
-    client, _ = make_client({f"{BASE}/api/groups/": FakeResponse({}, 500)})
+    # the body parses and holds no user, so only the status check keeps a 500
+    # from reading as "no users"
+    client, _ = make_client(
+        {
+            f"{BASE}/api/groups/": page([{"id": 3, "name": "smb"}]),
+            f"{BASE}/api/users/": FakeResponse({"results": [], "next": None}, 500),
+        }
+    )
     with pytest.raises(PaperlessError):
+        client.fetch_desired_users("smb")
+
+
+def test_group_name_is_compared_exactly():
+    # the server filter ignores case, so the client must not trust it
+    client, _ = make_client({f"{BASE}/api/groups/": page([{"id": 3, "name": "SMB"}])})
+    with pytest.raises(PaperlessError, match="does not exist"):
+        client.fetch_desired_users("smb")
+
+
+def test_record_without_groups_raises_paperless_error():
+    client, _ = make_client(
+        {
+            f"{BASE}/api/groups/": page([{"id": 3, "name": "smb"}]),
+            f"{BASE}/api/users/": page(
+                [{"id": 5, "username": "alice", "is_active": True}]
+            ),
+        }
+    )
+    with pytest.raises(PaperlessError, match="unexpected body"):
         client.fetch_desired_users("smb")
 
 

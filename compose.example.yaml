@@ -1,29 +1,26 @@
 services:
   smb:
-    build: .
+    # build: .
+    image: ghcr.io/flobernd/paperless-smb-sync:latest
     restart: unless-stopped
     ports:
       - "445:445"
     environment:
       PAPERLESS_URL: http://webserver:8000
       PAPERLESS_API_TOKEN: change-me
-      # SYNC_GROUP: smb
-      # POLL_INTERVAL: "30"
-      # UID_BASE: "20000"
+      # Needs the token of a superuser. It also needs SMB_HOST, since the
+      # document shows <server> in place of the server name without it.
+      # CREDENTIALS_DOCUMENT: "true"
+      # PAPERLESS_CONSUMPTION_DIR: /usr/src/paperless/consume
       # PAPERLESS_GID: "10000"
+      # POLL_INTERVAL: "30"
       # SHARE_NAME: inbox
       # SMB_HOST: paperless.example.lan
-      # Mail the credentials to each user; reuses the paperless mail settings.
-      # EMAIL_CREDENTIALS: "true"
-      # PAPERLESS_EMAIL_HOST: smtp.example.com
-      # PAPERLESS_EMAIL_PORT: "587"
-      # PAPERLESS_EMAIL_HOST_USER: paperless@example.com
-      # PAPERLESS_EMAIL_HOST_PASSWORD: change-me
-      # PAPERLESS_EMAIL_USE_TLS: "true"
-      # PAPERLESS_EMAIL_FROM: paperless@example.com
+      # SYNC_GROUP: smb
+      # UID_BASE: "20000"
     volumes:
       - /srv/paperless/inbox:/shares/inbox
-      # Holds passdb.tdb; without it every user gets a new password on recreate.
+      # Holds passdb.tdb. Without it each user gets a new password on recreate.
       - samba-data:/var/lib/samba
       # - ./smb-custom.conf:/etc/samba/conf.d/custom.conf:ro
 

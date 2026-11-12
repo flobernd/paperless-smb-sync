@@ -26,6 +26,7 @@ class Config:
     share_name: str
     smb_host: str
     consume_path: str
+    credentials_document: bool
     email_credentials: bool
     mail: MailConfig
 
@@ -138,6 +139,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         share_name=env.get("SHARE_NAME", "inbox"),
         smb_host=env.get("SMB_HOST", ""),
         consume_path=_read_consume_path(env),
+        credentials_document=_read_bool(env, "CREDENTIALS_DOCUMENT"),
         email_credentials=_read_bool(env, "EMAIL_CREDENTIALS"),
         mail=_read_mail(env),
     )

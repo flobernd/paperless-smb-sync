@@ -9,7 +9,7 @@ from pathlib import Path
 from .config import Config
 from .executor import execute
 from .mail import send_credentials
-from .model import ActualState, PaperlessUser
+from .model import ActualState, CredentialDocument, PaperlessUser, TokenUser
 from .paperless import PaperlessClient, PaperlessError
 from .planner import counted_uid, plan_cycle
 from .system import CommandError, SystemAdapter
@@ -45,16 +45,36 @@ class WarningRepeat:
         return due
 
 
+def _observe_documents(
+    api: PaperlessClient,
+) -> tuple[TokenUser | None, tuple[CredentialDocument, ...]]:
+    try:
+        token_user = api.token_user()
+        if not token_user.is_superuser:
+            return token_user, ()
+        return token_user, tuple(api.fetch_credential_documents())
+    except PaperlessError as exc:
+        # the documents are optional, so a failed read must not hold back the
+        # creation and the removal of accounts
+        log.error("credentials documents are unavailable in this cycle: %s", exc)
+        return None, ()
+
+
 def observe(
     cfg: Config, api: PaperlessClient, system: SystemAdapter
 ) -> tuple[list[PaperlessUser], ActualState]:
     desired = api.fetch_desired_users(cfg.sync_group)
     workflows = api.fetch_managed_workflows()
+    token_user, documents = (
+        _observe_documents(api) if cfg.credentials_document else (None, ())
+    )
     actual = ActualState(
         accounts=tuple(system.list_samba_accounts()),
         folders=tuple(system.list_inbox_folders()),
         workflows=tuple(workflows),
         unix_uids=system.list_unix_uids(),
+        documents=documents,
+        token_user=token_user,
     )
     return desired, actual
 
@@ -86,6 +106,7 @@ def run_cycle(
         smb_host=cfg.smb_host,
         share_name=cfg.share_name,
         deliver=partial(send_credentials, cfg.mail) if cfg.mail_enabled else None,
+        upload=actual.token_user is not None and actual.token_user.is_superuser,
     )
     return failures == 0
 

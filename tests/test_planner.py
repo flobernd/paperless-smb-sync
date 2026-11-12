@@ -1,18 +1,25 @@
+from dataclasses import replace
+
 from smb_sync.model import (
     ActualState,
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
+    CredentialDocument,
+    DeleteDocument,
     DeleteWorkflow,
     Deprovision,
     DisableAccount,
     EnableAccount,
+    HandOverDocument,
     InboxFolder,
     ManagedWorkflow,
     PaperlessUser,
+    RenameDocument,
     RenameUser,
     RepairUnixAccount,
     SambaAccount,
+    TokenUser,
     UpdateWorkflow,
 )
 from smb_sync.planner import plan_cycle
@@ -376,3 +383,106 @@ def test_rename_with_reactivation_enables_new_name():
         ),
         EnableAccount(username="dave"),
     )
+
+
+ADMIN = TokenUser(1, True)
+
+
+def test_pending_document_goes_to_the_user_with_its_id():
+    # uploaded for user 5 under the name alice, who is dave now, while user 9 took the name alice
+    desired = [PaperlessUser(5, "dave", True), PaperlessUser(9, "alice", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 20009, True), SambaAccount("dave", 20005, True)),
+        folders=(InboxFolder("alice", 20009), InboxFolder("dave", 20005)),
+        workflows=(workflow(8, "alice"), workflow(7, "dave")),
+        unix_uids={"alice": 20009, "dave": 20005},
+        token_user=ADMIN,
+        documents=(CredentialDocument(40, "alice", 1, recipient_id=5),),
+    )
+    assert planned(desired, actual).actions == (
+        HandOverDocument(document_id=40, user_id=5, username="dave"),
+    )
+
+
+def test_rename_retitles_the_document_of_the_user():
+    desired = [PaperlessUser(5, "dave", True)]
+    actual = replace(
+        provisioned_state(),
+        token_user=ADMIN,
+        documents=(CredentialDocument(40, "alice", 5),),
+    )
+    assert (
+        RenameDocument(document_id=40, old_username="alice", new_username="dave")
+        in planned(desired, actual).actions
+    )
+
+
+def test_document_without_owner_or_account_is_deleted():
+    actual = ActualState(
+        accounts=(),
+        folders=(),
+        workflows=(),
+        token_user=ADMIN,
+        documents=(
+            CredentialDocument(40, "alice", None),
+            CredentialDocument(41, "bob", 1, recipient_id=6),
+            CredentialDocument(42, "carol", 9),
+        ),
+    )
+    assert planned([], actual).actions == (
+        DeleteDocument(document_id=40),
+        DeleteDocument(document_id=41),
+    )
+
+
+def test_removal_takes_the_documents_of_that_account_only():
+    actual = replace(
+        provisioned_state(),
+        accounts=(SambaAccount("alice", 20005, True), SambaAccount("bob", 20006, True)),
+        token_user=ADMIN,
+        documents=(
+            CredentialDocument(40, "alice", 5),
+            CredentialDocument(41, "bob", 6),
+            CredentialDocument(42, "bob", 1, recipient_id=6),
+            CredentialDocument(43, "alice", None),
+        ),
+    )
+    assert planned([], actual).actions == (
+        Deprovision(
+            username="alice", workflow_id=7, delete_folder=True, documents=(40, 43)
+        ),
+    )
+
+
+def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
+    # the user of the token is in the sync group and leaves it
+    desired = [PaperlessUser(6, "bob", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("admin", 20001, True), SambaAccount("bob", 20006, True)),
+        folders=(InboxFolder("bob", 20006),),
+        workflows=(workflow(8, "bob"),),
+        unix_uids={"admin": 20001, "bob": 20006},
+        token_user=ADMIN,
+        documents=(
+            CredentialDocument(40, "admin", 1),
+            CredentialDocument(41, "bob", 1, recipient_id=6),
+        ),
+    )
+    assert planned(desired, actual).actions == (
+        Deprovision(
+            username="admin", workflow_id=None, delete_folder=False, documents=(40,)
+        ),
+        HandOverDocument(document_id=41, user_id=6, username="bob"),
+    )
+
+
+def test_pending_document_of_another_owner_is_left_with_a_warning():
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = replace(
+        provisioned_state(),
+        token_user=ADMIN,
+        documents=(CredentialDocument(40, "alice", 9, recipient_id=5),),
+    )
+    plan = planned(desired, actual)
+    assert plan.actions == ()
+    assert any("40" in w for w in plan.warnings)

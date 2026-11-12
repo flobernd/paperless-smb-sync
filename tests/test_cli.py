@@ -7,10 +7,12 @@ from smb_sync.cli import format_status, main, regen_password
 from smb_sync.config import Config, MailConfig
 from smb_sync.model import (
     ActualState,
+    CredentialDocument,
     InboxFolder,
     ManagedWorkflow,
     PaperlessUser,
     SambaAccount,
+    TokenUser,
 )
 from smb_sync.paperless import PaperlessError
 from smb_sync.planner import plan_cycle
@@ -36,6 +38,7 @@ CFG = Config(
     share_name="inbox",
     smb_host="",
     consume_path="/usr/src/paperless/consume",
+    credentials_document=False,
     email_credentials=False,
     mail=NO_MAIL,
 )
@@ -236,4 +239,84 @@ def test_regen_survives_an_api_failure_during_the_email_lookup(monkeypatch, capl
         # the password is already changed by this point, so a lookup failure
         # must not surface as a crash
         assert regen_password(MAIL_CFG, system, "alice", BrokenApi()) == 0
+    assert "api down" in caplog.text
+
+
+class FakeDocumentApi:
+    def __init__(self, documents):
+        self.documents = documents
+        self.calls = []
+        self.versions = []
+        self.uploaded = []
+
+    def token_user(self):
+        return TokenUser(1, True)
+
+    def fetch_credential_documents(self):
+        return self.documents
+
+    def hand_over_document(self, document_id, user_id, username):
+        self.calls.append(("hand_over_document", document_id, user_id, username))
+
+    def add_credentials_version(self, document_id, block):
+        self.calls.append(("add_credentials_version", document_id))
+        self.versions.append((document_id, block))
+
+    def upload_credentials(self, user_id, username, block):
+        self.uploaded.append((user_id, username))
+
+
+DOCUMENT_CFG = replace(CFG, credentials_document=True)
+
+
+def test_regen_adds_a_version_to_the_document_of_the_user(capsys):
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    api = FakeDocumentApi(
+        [CredentialDocument(41, "alice", 9), CredentialDocument(40, "alice", 5)]
+    )
+    assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
+    (document_id, block), = api.versions
+    assert document_id == 40
+    assert system.calls[0][1] in block
+    assert api.uploaded == []
+
+
+def test_regen_uploads_a_document_when_none_is_left(capsys):
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    api = FakeDocumentApi([])
+    assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
+    assert api.uploaded == [(5, "alice")]
+
+
+def test_regen_of_the_token_user_leaves_the_uploads_for_other_users(capsys):
+    system = FakeSystem(accounts=[SambaAccount("admin", 20001, True)])
+    api = FakeDocumentApi(
+        [
+            CredentialDocument(41, "bob", 1, recipient_id=6),
+            CredentialDocument(40, "admin", 1),
+        ]
+    )
+    assert regen_password(DOCUMENT_CFG, system, "admin", api) == 0
+    (document_id, _), = api.versions
+    assert document_id == 40
+
+
+def test_regen_resets_the_rights_of_the_document_before_it_writes(capsys):
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    api = FakeDocumentApi([CredentialDocument(40, "alice", 5)])
+    assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
+    assert [call[:2] for call in api.calls] == [
+        ("hand_over_document", 40),
+        ("add_credentials_version", 40),
+    ]
+
+
+def test_regen_survives_an_api_failure_at_the_document_update(caplog):
+    class DownApi:
+        def token_user(self):
+            raise PaperlessError("api down")
+
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    with caplog.at_level(logging.ERROR):
+        assert regen_password(DOCUMENT_CFG, system, "alice", DownApi()) == 0
     assert "api down" in caplog.text

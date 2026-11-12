@@ -73,7 +73,7 @@ def deliver_credentials(
             username,
         )
         return
-    block = credentials_block(smb_host, share_name, username, password, regen_hint=False)
+    block = credentials_block(smb_host, share_name, username, password, for_log=False)
     try:
         deliver(email, username, block)
         log.info("emailed credentials for '%s' to %s", username, email)

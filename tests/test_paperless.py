@@ -1,6 +1,6 @@
 import pytest
 
-from smb_sync.model import ManagedWorkflow, PaperlessUser
+from smb_sync.model import CredentialDocument, ManagedWorkflow, PaperlessUser
 from smb_sync.paperless import PaperlessClient, PaperlessError
 
 
@@ -246,3 +246,46 @@ def test_update_workflow_puts_full_payload():
         payload["triggers"][0]["filter_path"] == "/usr/src/paperless/consume/dave/*"
     )
     assert payload["actions"][0]["assign_owner"] == 5
+
+
+def test_only_the_exact_title_forms_make_a_credentials_document():
+    client, _ = make_client(
+        {
+            f"{BASE}/api/documents/": page(
+                [
+                    {"id": 40, "title": "[smb-sync] credentials alice", "owner": 5},
+                    {"id": 41, "title": "[SMB-SYNC] Credentials bob", "owner": None},
+                    {"id": 42, "title": "[smb-sync] credentials bob (user 6)", "owner": 1},
+                    {"id": 43, "title": "[smb-sync] credentials alice copy", "owner": 5},
+                ]
+            )
+        }
+    )
+    assert client.fetch_credential_documents() == [
+        CredentialDocument(40, "alice", 5),
+        CredentialDocument(42, "bob", 1, recipient_id=6),
+    ]
+
+
+def test_only_the_trashed_credentials_of_that_user_are_emptied():
+    client, session = make_client(
+        {
+            f"{BASE}/api/trash/": page(
+                [
+                    {"id": 40, "title": "[smb-sync] credentials alice", "owner": 5},
+                    {"id": 41, "title": "[smb-sync] credentials alice (user 5)", "owner": 1},
+                    {"id": 42, "title": "[smb-sync] credentials bob", "owner": 6},
+                    {"id": 43, "title": "invoice", "owner": 5},
+                    {"id": 44, "title": "[smb-sync] credentials dave", "owner": 5},
+                ]
+            )
+        }
+    )
+    client.delete_credentials("alice", [40, 44])
+    assert session.requests == [
+        ("DELETE", f"{BASE}/api/documents/40/", None),
+        ("DELETE", f"{BASE}/api/documents/44/", None),
+        ("POST", f"{BASE}/api/trash/", {"action": "empty", "documents": [40, 41, 44]}),
+    ]
+    client.delete_credentials("carol", [])
+    assert len(session.requests) == 3

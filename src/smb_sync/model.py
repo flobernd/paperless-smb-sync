@@ -31,11 +31,27 @@ class ManagedWorkflow:
 
 
 @dataclass(frozen=True)
+class CredentialDocument:
+    id: int
+    username: str
+    owner_id: int | None
+    recipient_id: int | None = None
+
+
+@dataclass(frozen=True)
+class TokenUser:
+    id: int
+    is_superuser: bool
+
+
+@dataclass(frozen=True)
 class ActualState:
     accounts: tuple[SambaAccount, ...]
     folders: tuple[InboxFolder, ...]
     workflows: tuple[ManagedWorkflow, ...]
     unix_uids: Mapping[str, int] = field(default_factory=dict)
+    documents: tuple[CredentialDocument, ...] = ()
+    token_user: TokenUser | None = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +73,11 @@ class CreateWorkflow:
 
 
 @dataclass(frozen=True)
+class DeleteDocument:
+    document_id: int
+
+
+@dataclass(frozen=True)
 class DeleteWorkflow:
     workflow_id: int
 
@@ -66,6 +87,7 @@ class Deprovision:
     username: str
     workflow_id: int | None
     delete_folder: bool
+    documents: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +98,20 @@ class DisableAccount:
 @dataclass(frozen=True)
 class EnableAccount:
     username: str
+
+
+@dataclass(frozen=True)
+class HandOverDocument:
+    document_id: int
+    user_id: int
+    username: str
+
+
+@dataclass(frozen=True)
+class RenameDocument:
+    document_id: int
+    old_username: str
+    new_username: str
 
 
 @dataclass(frozen=True)
@@ -104,10 +140,13 @@ Action = (
     CreateAccount
     | CreateFolder
     | CreateWorkflow
+    | DeleteDocument
     | DeleteWorkflow
     | Deprovision
     | DisableAccount
     | EnableAccount
+    | HandOverDocument
+    | RenameDocument
     | RenameUser
     | RepairUnixAccount
     | UpdateWorkflow

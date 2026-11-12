@@ -9,7 +9,13 @@ from .credentials import credentials_block, generate_password
 from .mail import deliver_credentials, send_credentials
 from .model import ActualState, PaperlessUser, Plan, RenameUser
 from .paperless import PaperlessClient, PaperlessError
-from .planner import counted_accounts, counted_uid, plan_cycle
+from .planner import (
+    NO_SUPERUSER_WARNING,
+    counted_accounts,
+    counted_uid,
+    plan_cycle,
+    user_documents,
+)
 from .service import (
     DEFAULT_HEARTBEAT_PATH,
     heartbeat_is_fresh,
@@ -106,6 +112,39 @@ def _email_of(api: PaperlessClient, cfg: Config, username: str) -> str:
     return user.email if user is not None else ""
 
 
+def _update_document(
+    cfg: Config, api: PaperlessClient, username: str, user_id: int, password: str
+) -> None:
+    block = credentials_block(
+        cfg.smb_host, cfg.share_name, username, password, for_log=False
+    )
+    try:
+        token_user = api.token_user()
+        if not token_user.is_superuser:
+            log.warning("%s", NO_SUPERUSER_WARNING)
+            return
+        documents = user_documents(
+            api.fetch_credential_documents(), user_id, token_user
+        )
+        target = next(iter(documents), None)
+        if target is None:
+            api.upload_credentials(user_id, username, block)
+            log.info("uploaded a new credentials document for '%s'", username)
+        else:
+            # The owner can have granted a right to someone else, or given away
+            # a document that it titled like this one, so the rights are reset
+            # before the new password goes in.
+            api.hand_over_document(target.id, user_id, username)
+            api.add_credentials_version(target.id, block)
+            log.info("added the new password to document %d", target.id)
+    except PaperlessError as exc:
+        # the password is already changed and printed, so a paperless error
+        # must not fail the command
+        log.error(
+            "could not update the credentials document of '%s': %s", username, exc
+        )
+
+
 def regen_password(
     cfg: Config,
     system: SystemAdapter,
@@ -125,12 +164,15 @@ def regen_password(
             file=sys.stderr,
         )
         return 1
-    if account is None or counted_uid(account, cfg.uid_base) is None:
+    stored_uid = None if account is None else counted_uid(account, cfg.uid_base)
+    if stored_uid is None:
         print(f"no managed samba account '{username}'", file=sys.stderr)
         return 1
     password = generate_password()
     system.set_samba_password(username, password, create=False)
     print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
+    if cfg.credentials_document:
+        _update_document(cfg, api, username, stored_uid - cfg.uid_base, password)
     if not cfg.mail_enabled:
         return 0
     try:

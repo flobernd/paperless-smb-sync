@@ -6,7 +6,7 @@ from dataclasses import replace
 import pytest
 
 from smb_sync.config import Config, MailConfig
-from smb_sync.model import PaperlessUser, SambaAccount
+from smb_sync.model import PaperlessUser, SambaAccount, TokenUser
 from smb_sync.paperless import PaperlessError
 from smb_sync.service import (
     WarningRepeat,
@@ -38,16 +38,19 @@ CFG = Config(
     share_name="inbox",
     smb_host="",
     consume_path="/usr/src/paperless/consume",
+    credentials_document=False,
     email_credentials=False,
     mail=NO_MAIL,
 )
 
 
 class FakeApi:
-    def __init__(self, users=None, fail=False):
+    def __init__(self, users=None, fail=False, token_user=None):
         self.users = users or []
         self.fail = fail
         self.created = []
+        self._token_user = token_user
+        self.uploaded = []
 
     def fetch_desired_users(self, group_name):
         if self.fail:
@@ -57,8 +60,17 @@ class FakeApi:
     def fetch_managed_workflows(self):
         return []
 
+    def token_user(self):
+        return self._token_user
+
+    def fetch_credential_documents(self):
+        return []
+
     def create_workflow(self, user_id, username):
         self.created.append(username)
+
+    def upload_credentials(self, user_id, username, block):
+        self.uploaded.append((user_id, username))
 
 
 class FakeSystem:
@@ -245,6 +257,44 @@ def test_nothing_is_emailed_when_mail_is_disabled(monkeypatch, capsys):
     api = FakeApi(users=[PaperlessUser(5, "alice", True, "alice@example.com")])
     assert run_cycle(CFG, api, FakeSystem()) is True
     assert sent == []
+
+
+DOCUMENT_CFG = replace(CFG, credentials_document=True)
+
+
+def test_only_a_superuser_token_uploads_a_document(caplog):
+    users = [PaperlessUser(5, "alice", True)]
+    admin = FakeApi(users=users, token_user=TokenUser(1, True))
+    assert run_cycle(DOCUMENT_CFG, admin, FakeSystem()) is True
+    assert admin.uploaded == [(5, "alice")]
+
+    plain = FakeApi(users=users, token_user=TokenUser(1, False))
+    with caplog.at_level(logging.WARNING):
+        assert run_cycle(DOCUMENT_CFG, plain, FakeSystem()) is True
+    assert plain.uploaded == []
+    assert "superuser" in caplog.text
+
+
+class NoTokenUser(FakeApi):
+    def token_user(self):
+        raise PaperlessError("documents down")
+
+
+class NoDocumentList(FakeApi):
+    def fetch_credential_documents(self):
+        raise PaperlessError("documents down")
+
+
+@pytest.mark.parametrize("api_class", [NoTokenUser, NoDocumentList])
+def test_a_failed_document_read_does_not_stop_the_cycle(api_class, caplog):
+    api = api_class(
+        users=[PaperlessUser(5, "alice", True)], token_user=TokenUser(1, True)
+    )
+    with caplog.at_level(logging.ERROR):
+        assert run_cycle(DOCUMENT_CFG, api, FakeSystem()) is True
+    assert api.created == ["alice"]
+    assert api.uploaded == []
+    assert "documents down" in caplog.text
 
 
 def test_restore_makes_unix_accounts_for_counted_entries_only():

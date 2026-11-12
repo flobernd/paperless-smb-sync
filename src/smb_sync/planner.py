@@ -1,5 +1,5 @@
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Container, Iterable, Mapping, Sequence
 
 from .model import (
     Action,
@@ -7,19 +7,29 @@ from .model import (
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
+    CredentialDocument,
+    DeleteDocument,
     DeleteWorkflow,
     Deprovision,
     DisableAccount,
     EnableAccount,
+    HandOverDocument,
     InboxFolder,
     ManagedWorkflow,
     PaperlessUser,
     Plan,
+    RenameDocument,
     RenameUser,
     RepairUnixAccount,
     SambaAccount,
+    TokenUser,
     UpdateWorkflow,
     workflow_filter,
+)
+
+NO_SUPERUSER_WARNING = (
+    "CREDENTIALS_DOCUMENT is on, but the API token belongs to no superuser, so no "
+    "credentials document is made"
 )
 
 # useradd-compatible names only; anything else is skipped with a warning
@@ -71,6 +81,77 @@ def _missing_resources(
             )
         )
     return actions
+
+
+def user_documents(
+    documents: Iterable[CredentialDocument], user_id: int, token_user: TokenUser
+) -> tuple[CredentialDocument, ...]:
+    # A title with an id marks an upload before its hand-over, which the
+    # token's user owns and which can be meant for another user.
+    return tuple(
+        d
+        for d in documents
+        if (d.owner_id == user_id and d.recipient_id is None)
+        or (d.owner_id == token_user.id and d.recipient_id == user_id)
+    )
+
+
+def _removal_documents(
+    account: SambaAccount,
+    uid_base: int,
+    desired_uids: Container[int],
+    documents: Sequence[CredentialDocument],
+    token_user: TokenUser | None,
+) -> tuple[int, ...] | None:
+    stored_uid = counted_uid(account, uid_base)
+    # the old name of a rename has the uid of a desired user, who keeps the
+    # documents
+    if token_user is None or stored_uid is None or stored_uid in desired_uids:
+        return None
+    owned = {d.id for d in user_documents(documents, stored_uid - uid_base, token_user)}
+    return tuple(
+        d.id
+        for d in documents
+        if d.id in owned or (d.owner_id is None and d.username == account.username)
+    )
+
+
+def _document_action(
+    document: CredentialDocument,
+    token_user: TokenUser,
+    users_by_id: Mapping[int, PaperlessUser],
+    desired_ids: Container[int],
+    stored_uids: Container[int | None],
+    uid_base: int,
+) -> Action | None:
+    if document.owner_id is None:
+        # every user can read a document whose owner was deleted
+        return DeleteDocument(document_id=document.id)
+    if document.recipient_id is not None and document.owner_id == token_user.id:
+        # the id decides, since another user can have taken the name that the
+        # upload was made for
+        user = users_by_id.get(document.recipient_id)
+        if user is not None:
+            return HandOverDocument(
+                document_id=document.id, user_id=user.id, username=user.username
+            )
+        # while an entry stores the uid, the removal of that account takes the
+        # document
+        if (
+            document.recipient_id not in desired_ids
+            and uid_base + document.recipient_id not in stored_uids
+        ):
+            return DeleteDocument(document_id=document.id)
+        return None
+    if document.recipient_id is None:
+        owner = users_by_id.get(document.owner_id)
+        if owner is not None and owner.username != document.username:
+            return RenameDocument(
+                document_id=document.id,
+                old_username=document.username,
+                new_username=owner.username,
+            )
+    return None
 
 
 def plan_cycle(
@@ -228,10 +309,23 @@ def plan_cycle(
         warnings.append(
             f"deprovisioning of '{name}' deferred to a later cycle (one per cycle)"
         )
+    delivery = actual.token_user
+    if delivery is not None and not delivery.is_superuser:
+        warnings.append(NO_SUPERUSER_WARNING)
+        delivery = None
     deprovisioned = set(candidates[:1])
+    held: set[int] = set()
     for name in deprovisioned:
         workflow = workflows_by_username.get(name)
         inbox = folders_by_name.get(name)
+        documents = _removal_documents(
+            stale_accounts[name],
+            uid_base,
+            expected_uid_owner,
+            actual.documents,
+            delivery,
+        )
+        held.update(documents or ())
         actions.append(
             Deprovision(
                 username=name,
@@ -239,6 +333,7 @@ def plan_cycle(
                 delete_folder=inbox is not None
                 and inbox.uid == stale_accounts[name].uid
                 and inbox.uid not in expected_uid_owner,
+                documents=documents,
             )
         )
 
@@ -251,6 +346,29 @@ def plan_cycle(
             and workflow.username not in protected_names
         ):
             actions.append(DeleteWorkflow(workflow_id=workflow.id))
+
+    if delivery is not None:
+        users_by_id = {u.id: u for u in valid}
+        desired_ids = {u.id for u in desired}
+        for document in actual.documents:
+            if document.id in held:
+                continue
+            if document.recipient_id is not None and document.owner_id not in (
+                None,
+                delivery.id,
+            ):
+                warnings.append(
+                    f"credentials document {document.id} waits for user "
+                    f"{document.recipient_id} but the user of the token does not own "
+                    f"it, so it was left untouched. A paperless workflow that sets "
+                    f"the owner of an upload can cause this."
+                )
+                continue
+            action = _document_action(
+                document, delivery, users_by_id, desired_ids, accounts_by_uid, uid_base
+            )
+            if action is not None:
+                actions.append(action)
 
     return Plan(
         actions=tuple(actions),

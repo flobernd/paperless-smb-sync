@@ -8,17 +8,20 @@ from .model import (
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
+    DeleteDocument,
     DeleteWorkflow,
     Deprovision,
     DisableAccount,
     EnableAccount,
+    HandOverDocument,
     PaperlessUser,
+    RenameDocument,
     RenameUser,
     RepairUnixAccount,
     UpdateWorkflow,
 )
 from .mail import CredentialDelivery, deliver_credentials
-from .paperless import PaperlessClient
+from .paperless import PaperlessClient, PaperlessError
 from .system import SystemAdapter
 
 log = logging.getLogger(__name__)
@@ -32,8 +35,11 @@ def execute(
     smb_host: str,
     share_name: str,
     deliver: CredentialDelivery | None,
+    upload: bool,
 ) -> int:
-    announce = partial(_announce_credentials, smb_host, share_name, deliver)
+    announce = partial(
+        _announce_credentials, api, smb_host, share_name, deliver, upload
+    )
     failures = 0
     for action in actions:
         try:
@@ -47,9 +53,11 @@ def execute(
 
 
 def _announce_credentials(
+    api: PaperlessClient,
     smb_host: str,
     share_name: str,
     deliver: CredentialDelivery | None,
+    upload: bool,
     user: PaperlessUser,
     password: str,
 ) -> None:
@@ -62,6 +70,20 @@ def _announce_credentials(
             share_name=share_name,
             username=user.username,
             password=password,
+        )
+    if not upload:
+        return
+    block = credentials_block(
+        smb_host, share_name, user.username, password, for_log=False
+    )
+    try:
+        api.upload_credentials(user.id, user.username, block)
+        log.info("uploaded the credentials document of '%s'", user.username)
+    except PaperlessError as exc:
+        # the password is already set and the block is in the log, so a failed
+        # upload must not keep the creation from finishing
+        log.error(
+            "could not upload the credentials document of '%s': %s", user.username, exc
         )
 
 
@@ -103,7 +125,10 @@ def _apply(
             api.delete_workflow(workflow_id)
             log.info("deleted workflow %d", workflow_id)
         case Deprovision(
-            username=username, workflow_id=workflow_id, delete_folder=delete_folder
+            username=username,
+            workflow_id=workflow_id,
+            delete_folder=delete_folder,
+            documents=documents,
         ):
             # A failed step ends the removal. The entry goes after the folder
             # because it proves that the daemon made the folder, and while it
@@ -113,6 +138,9 @@ def _apply(
             if workflow_id is not None:
                 api.delete_workflow(workflow_id)
                 log.info("deleted workflow %d", workflow_id)
+            if documents is not None:
+                api.delete_credentials(username, documents)
+                log.info("deleted the credentials documents of '%s'", username)
             if delete_folder:
                 system.delete_inbox_folder(username)
                 log.info("deleted inbox folder '%s' including contents", username)
@@ -125,6 +153,24 @@ def _apply(
         case EnableAccount(username=username):
             system.enable_samba_account(username)
             log.info("re-enabled samba account '%s'", username)
+        case DeleteDocument(document_id=document_id):
+            api.delete_document(document_id)
+            log.info("deleted credentials document %d", document_id)
+        case HandOverDocument(
+            document_id=document_id, user_id=user_id, username=username
+        ):
+            api.hand_over_document(document_id, user_id, username)
+            log.info("handed credentials document %d to '%s'", document_id, username)
+        case RenameDocument(
+            document_id=document_id, old_username=old, new_username=new
+        ):
+            api.retitle_document(document_id, new)
+            api.add_document_note(
+                document_id,
+                f"The username changed from '{old}' to '{new}'. "
+                f"The password is the same.",
+            )
+            log.info("retitled credentials document %d for '%s'", document_id, new)
         case RenameUser(
             old_username=old,
             new_username=new,

@@ -19,12 +19,22 @@ wait_for() {
     fail "$what"
 }
 
+user_token() {
+    curl -fsS -X POST "$API/api/token/" -H 'Content-Type: application/json' \
+        -d "$(jq -n --arg username "$1" --arg password "$2" '{$username, $password}')" \
+        | jq -er .token
+}
 as_user() {
     local token
-    token=$(curl -fsS -X POST "$API/api/token/" -H 'Content-Type: application/json' \
-        -d "$(jq -n --arg username "$1" --arg password "$2" '{$username, $password}')" \
-        | jq -er .token) || return
+    token=$(user_token "$1" "$2") || return
     shift 2
+    curl -fsS -H "Authorization: Token $token" "$@"
+}
+# paperless answers 429 to the sixth token request in a minute, so a check that
+# wait_for repeats takes a token that the caller fetched once
+with_token() {
+    local token=$1
+    shift
     curl -fsS -H "Authorization: Token $token" "$@"
 }
 
@@ -68,6 +78,50 @@ has_workflow() {
         <<<"$workflows" >/dev/null
 }
 account_renamed() { has_account "$2" && lacks_account "$1"; }
+logged_block() {
+    local logs
+    logs=$(compose logs smb) || return
+    grep -q "SMB credentials for '$1'" <<<"$logs"
+}
+sees_document() {
+    local documents
+    documents=$(with_token "$1" -G --data-urlencode "title__iexact=$2" \
+        "$API/api/documents/") || return
+    jq -e --arg title "$2" '.count == 1 and .results[0].title == $title' \
+        <<<"$documents" >/dev/null
+}
+titled_count() {
+    local documents
+    documents=$(with_token "$1" -G --data-urlencode "title__iexact=$2" \
+        "$API/api/documents/") || return
+    jq -er '.count' <<<"$documents"
+}
+document_holds() {
+    local document
+    document=$(with_token "$1" "$API/api/documents/$2/") || return
+    jq -e --arg password "$3" '.content | contains($password)' <<<"$document" >/dev/null
+}
+document_titled() {
+    local document
+    document=$(api "$API/api/documents/$1/") || return
+    jq -e --arg title "$2" '.title == $title' <<<"$document" >/dev/null
+}
+note_names() {
+    local notes
+    notes=$(api "$API/api/documents/$1/notes/") || return
+    jq -e --arg name "$2" 'any(.[]; .note | contains($name))' <<<"$notes" >/dev/null
+}
+document_gone() {
+    local code
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Token $TOKEN" \
+        "$API/api/documents/$1/") || return
+    [ "$code" = 404 ]
+}
+trash_empty() {
+    local trash
+    trash=$(api "$API/api/trash/") || return
+    jq -e '.count == 0' <<<"$trash" >/dev/null
+}
 smb_healthy() {
     local status
     status=$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q smb)") \
@@ -171,6 +225,57 @@ jq -e '.count == 1' <<<"$SEEN" >/dev/null || fail "dave does not see nested.txt"
 SEEN=$(as_user carol paperless-pass "$API/api/documents/?title__iexact=nested") \
     || fail "carol could not list documents"
 jq -e '.count == 0' <<<"$SEEN" >/dev/null || fail "carol sees nested.txt of dave"
+
+echo "== asserting the credentials document =="
+SEEN=$(api -G --data-urlencode 'title__istartswith=[smb-sync] credentials carol' \
+    "$API/api/documents/") || fail "could not list documents"
+jq -e '.count == 0' <<<"$SEEN" >/dev/null \
+    || fail "a credentials document of carol appeared with the option off"
+export SMOKE_DOCUMENT=true
+compose up -d smb
+FRANK_ID=$(api -X POST "$API/api/users/" \
+    -d "{\"username\":\"frank\",\"password\":\"paperless-pass\",\"groups\":[$GROUP_ID]}" | jq -r .id)
+wait_for "credentials block of frank not found in logs" logged_block frank
+FRANK_PASSWORD=$(compose logs smb | grep -A4 "SMB credentials for 'frank'" \
+    | awk '/Password:/{print $NF}' | tail -1) || true
+[ -n "$FRANK_PASSWORD" ] || fail "password of frank not found in logs"
+FRANK_TOKEN=$(user_token frank paperless-pass) || fail "could not obtain the token of frank"
+wait_for "frank does not see his credentials document" \
+    sees_document "$FRANK_TOKEN" '[smb-sync] credentials frank'
+DOCUMENT=$(with_token "$FRANK_TOKEN" -G \
+    --data-urlencode 'title__iexact=[smb-sync] credentials frank' "$API/api/documents/") \
+    || fail "frank could not list documents"
+DOCUMENT_ID=$(jq -er '.results[0].id' <<<"$DOCUMENT") || fail "no id for the document of frank"
+jq -e --arg password "$FRANK_PASSWORD" '.results[0].content | contains($password)' \
+    <<<"$DOCUMENT" >/dev/null || fail "the document of frank does not hold his password"
+DAVE_TOKEN=$(user_token dave paperless-pass) || fail "could not obtain the token of dave"
+COUNT=$(titled_count "$DAVE_TOKEN" '[smb-sync] credentials frank') \
+    || fail "dave could not list documents"
+[ "$COUNT" = 0 ] || fail "dave sees the credentials document of frank"
+api -X PATCH "$API/api/documents/$DOCUMENT_ID/" \
+    -d "{\"set_permissions\":{\"view\":{\"users\":[$DAVE_ID],\"groups\":[]}}}" >/dev/null \
+    || fail "could not give dave a view right on the document of frank"
+COUNT=$(titled_count "$DAVE_TOKEN" '[smb-sync] credentials frank') \
+    || fail "dave could not list documents"
+[ "$COUNT" = 1 ] || fail "dave does not see the document of frank after the grant"
+REGEN=$(compose exec -T smb smb-sync regen frank) || fail "regen of frank failed"
+# the regen resets the rights before it returns, so this check does not wait
+COUNT=$(titled_count "$DAVE_TOKEN" '[smb-sync] credentials frank') \
+    || fail "dave could not list documents"
+[ "$COUNT" = 0 ] || fail "dave still sees the document of frank after the regen"
+NEW_PASSWORD=$(awk '/Password:/{print $NF}' <<<"$REGEN")
+[ -n "$NEW_PASSWORD" ] || fail "regen of frank printed no password"
+wait_for "the document of frank did not get the new password" \
+    document_holds "$FRANK_TOKEN" "$DOCUMENT_ID" "$NEW_PASSWORD"
+api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"username":"gina"}' >/dev/null
+wait_for "the document was not retitled for gina" \
+    document_titled "$DOCUMENT_ID" '[smb-sync] credentials gina'
+# the note follows the new title in a request of its own
+wait_for "no note of the document names gina" note_names "$DOCUMENT_ID" gina
+api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"groups":[]}' >/dev/null
+wait_for "the document of gina was not deleted" document_gone "$DOCUMENT_ID"
+# the empty action follows the DELETE in a request of its own
+wait_for "the trash still holds a document" trash_empty
 
 echo "== asserting deprovisioning =="
 api -X PATCH "$API/api/users/$USER_ID/" -d '{"groups":[]}' >/dev/null

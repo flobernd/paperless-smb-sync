@@ -16,7 +16,7 @@ def credentials_block(
     username: str,
     password: str,
     *,
-    regen_hint: bool = True,
+    for_log: bool = True,
 ) -> str:
     server = host or "<server>"
     lines = [
@@ -26,11 +26,11 @@ def credentials_block(
         f"  Share:    \\\\{server}\\{share_name}",
         f"  Username: {username}",
         f"  Password: {password}",
-        "This password is shown only once.",
     ]
-    # `smb-sync regen` runs inside the container, so it is only actionable for
-    # whoever reads the log, not for a user who receives the block by mail
-    if regen_hint:
+    # The mail and the document keep the block, and `smb-sync regen` runs
+    # inside the container, so both lines hold for a reader of the log alone.
+    if for_log:
+        lines.append("This password is shown only once.")
         lines.append(f"Regenerate with: smb-sync regen {username}")
     lines.append("=" * 60)
     return "\n".join(lines)

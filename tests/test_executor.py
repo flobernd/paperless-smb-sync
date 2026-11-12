@@ -65,8 +65,14 @@ class FakeSystem:
 
 
 class FakeApi:
-    def __init__(self):
+    def __init__(self, fail_upload=False):
         self.calls = []
+        self.fail_upload = fail_upload
+
+    def upload_credentials(self, user_id, username, block):
+        if self.fail_upload:
+            raise PaperlessError("upload refused")
+        self.calls.append(("upload_credentials", user_id, username))
 
     def create_workflow(self, user_id, username):
         self.calls.append(("create_workflow", user_id, username))
@@ -89,7 +95,7 @@ class FakeDelivery:
         self.sent.append((to, username, block))
 
 
-def run(actions, system=None, api=None, deliver=None):
+def run(actions, system=None, api=None, deliver=None, upload=False):
     system = system or FakeSystem()
     api = api or FakeApi()
     failures = execute(
@@ -99,6 +105,7 @@ def run(actions, system=None, api=None, deliver=None):
         smb_host="nas.lan",
         share_name="inbox",
         deliver=deliver,
+        upload=upload,
     )
     return failures, system, api
 
@@ -271,6 +278,19 @@ def test_a_failed_mail_does_not_fail_provisioning(caplog):
         "store_uid",
     ]
     assert "smtp down" in caplog.text
+
+
+def test_a_failed_upload_does_not_fail_the_creation(caplog):
+    user = PaperlessUser(5, "alice", True)
+    with caplog.at_level(logging.ERROR):
+        failures, system, _ = run(
+            [CreateAccount(user=user, uid=20005)],
+            api=FakeApi(fail_upload=True),
+            upload=True,
+        )
+    assert failures == 0
+    assert system.calls[-1] == ("store_uid", "alice", 20005)
+    assert "upload refused" in caplog.text
 
 
 def test_the_emailed_block_drops_the_admin_only_regen_hint(capsys):

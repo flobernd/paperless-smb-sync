@@ -151,6 +151,41 @@ def test_at_most_one_deprovision_per_cycle():
     assert DeleteWorkflow(workflow_id=8) in plan.actions
 
 
+def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
+    desired = [PaperlessUser(5, "dave", True)]
+    actual = ActualState(
+        accounts=(
+            SambaAccount("alice", 20005, True),
+            SambaAccount("dave", 20005, True),
+        ),
+        folders=(InboxFolder("alice", 20005),),
+        workflows=(),
+        unix_uids={"dave": 20005},
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert (
+        Deprovision(username="alice", workflow_id=None, delete_folder=False)
+        in plan.actions
+    )
+
+
+def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
+    # the removal of alice closed her login in an earlier cycle and then failed
+    actual = ActualState(
+        accounts=(
+            SambaAccount("alice", 20005, False),
+            SambaAccount("bob", 20006, True),
+        ),
+        folders=(),
+        workflows=(),
+    )
+    plan = plan_cycle([], actual, UID_BASE)
+    assert plan.actions == (
+        Deprovision(username="bob", workflow_id=None, delete_folder=False),
+    )
+    assert any("alice" in w for w in plan.warnings)
+
+
 def test_unmanaged_account_untouched():
     actual = ActualState(
         accounts=(SambaAccount("legacy", 1000, True),),
@@ -196,7 +231,7 @@ def test_unmanaged_folder_warned_not_deleted():
 def test_uid_mismatch_warned_not_touched():
     desired = [PaperlessUser(6, "alice", True)]
     plan = plan_cycle(desired, provisioned_state(username="alice", user_id=5), UID_BASE)
-    assert not any(isinstance(a, (Deprovision, RenameUser)) for a in plan.actions)
+    assert plan.actions == ()
     assert any("uid" in w.lower() for w in plan.warnings)
 
 
@@ -206,6 +241,31 @@ def test_invalid_rename_preserves_existing_resources():
     assert plan.actions == ()
     assert any("alice@example.com" in w for w in plan.warnings)
     assert not any("folder" in w for w in plan.warnings)
+
+
+def test_user_named_like_another_unix_account_is_skipped():
+    desired = [PaperlessUser(5, "mail", True)]
+    taken = ActualState(accounts=(), folders=(), workflows=(), unix_uids={"mail": 8})
+    plan = plan_cycle(desired, taken, UID_BASE)
+    assert plan.actions == ()
+    assert any("mail" in w for w in plan.warnings)
+
+    # the same name with the user's own uid is a creation that stopped early
+    own = ActualState(accounts=(), folders=(), workflows=(), unix_uids={"mail": 20005})
+    plan = plan_cycle(desired, own, UID_BASE)
+    assert CreateAccount(user=desired[0], uid=20005) in plan.actions
+
+
+def test_rename_to_the_name_of_another_unix_account_changes_nothing():
+    desired = [PaperlessUser(5, "mail", True)]
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 20005, True),),
+        folders=(InboxFolder("alice", 20005),),
+        workflows=(ManagedWorkflow(7, "alice"),),
+        unix_uids={"alice": 20005, "mail": 8},
+    )
+    plan = plan_cycle(desired, actual, UID_BASE)
+    assert plan.actions == ()
 
 
 def test_rename_with_deactivation_disables_new_name():

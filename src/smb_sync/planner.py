@@ -86,6 +86,17 @@ def plan_cycle(
         account = accounts_by_name.get(user.username)
 
         if account is None:
+            # a unix account with the user's own uid is what a creation that
+            # stopped early leaves behind
+            taken_uid = actual.unix_uids.get(user.username)
+            if taken_uid is not None and taken_uid != uid:
+                invalid_uids.add(uid)
+                warnings.append(
+                    f"user '{user.username}' has the name of another unix account "
+                    f"(uid {taken_uid}) and was skipped. Rename the user in "
+                    f"paperless to provision it."
+                )
+                continue
             holder = accounts_by_uid.get(uid)
             if holder is not None and holder.username not in desired_names:
                 # same uid under another name means the paperless user was
@@ -122,15 +133,17 @@ def plan_cycle(
             actions.append(
                 RepairUnixAccount(username=user.username, uid=account.uid)
             )
+        missing = _missing_resources(user, uid, folders_by_name, workflows_by_username)
         if account.uid != uid:
             warnings.append(
                 f"account '{user.username}' has uid {account.uid}, expected {uid}; "
                 f"left as-is"
             )
+            # the planner cannot tell whose data the folder holds, so a chown
+            # would hand it to the paperless user who has the name now
+            missing = [a for a in missing if not isinstance(a, CreateFolder)]
         actions.extend(_state_change(user.username, account.enabled, user.is_active))
-        actions.extend(
-            _missing_resources(user, uid, folders_by_name, workflows_by_username)
-        )
+        actions.extend(missing)
 
     claimed_names = desired_names | renamed_from
     protected_names = {a.username for a in counted if a.uid in invalid_uids}
@@ -148,7 +161,7 @@ def plan_cycle(
     expected_uid_owner = {uid_base + u.id: u.username for u in valid}
 
     stale_accounts = {
-        a.username: a.uid
+        a.username: a
         for a in counted
         if a.uid not in invalid_uids and a.username not in claimed_names
     }
@@ -177,7 +190,12 @@ def plan_cycle(
                 f"samba account and was left untouched"
             )
 
-    candidates = sorted(stale_accounts)
+    # a removal closes the login as its first step, so an enabled entry is one
+    # that no removal has tried yet. Taking those first keeps a removal that
+    # fails in each cycle from holding the login of another former user open.
+    candidates = sorted(
+        stale_accounts, key=lambda name: (not stale_accounts[name].enabled, name)
+    )
     for name in candidates[1:]:
         warnings.append(
             f"deprovisioning of '{name}' deferred to a later cycle (one per cycle)"
@@ -191,7 +209,7 @@ def plan_cycle(
                 username=name,
                 workflow_id=workflow.id if workflow else None,
                 delete_folder=inbox is not None
-                and inbox.uid == stale_accounts[name]
+                and inbox.uid == stale_accounts[name].uid
                 and inbox.uid not in expected_uid_owner,
             )
         )

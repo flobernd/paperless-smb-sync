@@ -1,4 +1,5 @@
 import os
+import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -24,6 +25,7 @@ class Config:
     paperless_gid: int
     share_name: str
     smb_host: str
+    consume_path: str
     email_credentials: bool
     mail: MailConfig
 
@@ -66,6 +68,33 @@ def _read_int(
     return value
 
 
+def _read_consume_path(env: Mapping[str, str]) -> str:
+    raw = env.get("PAPERLESS_CONSUMPTION_DIR", "/usr/src/paperless/consume")
+    path = raw.rstrip("/")
+    # The path starts the filter of each workflow, which paperless matches as
+    # an fnmatch pattern against the absolute path of a scan.
+    if not path.startswith("/"):
+        raise ValueError(
+            f"PAPERLESS_CONSUMPTION_DIR must be an absolute path, got '{raw}'"
+        )
+    if any(char in path for char in "*?[]"):
+        raise ValueError(
+            "PAPERLESS_CONSUMPTION_DIR must not contain the pattern characters "
+            f"*, ?, [ and ], got '{raw}'"
+        )
+    # paperless resolves its consumption directory and the path of each scan,
+    # so a filter with such parts matches no scan. The daemon cannot normalize
+    # the value for paperless: a .. after a symbolic link leads to another
+    # place than the text says. normpath keeps a leading // that paperless
+    # drops, so that case has a check of its own.
+    if path.startswith("//") or posixpath.normpath(path) != path:
+        raise ValueError(
+            "PAPERLESS_CONSUMPTION_DIR must not contain '//', '.' or '..' parts, "
+            f"got '{raw}'"
+        )
+    return path
+
+
 def _read_mail(env: Mapping[str, str]) -> MailConfig:
     # deliberately the paperless-ngx variable names, so an existing mail setup
     # can be shared with this container instead of configured twice
@@ -105,6 +134,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         paperless_gid=_read_int(env, "PAPERLESS_GID", 10000),
         share_name=env.get("SHARE_NAME", "inbox"),
         smb_host=env.get("SMB_HOST", ""),
+        consume_path=_read_consume_path(env),
         email_credentials=_read_bool(env, "EMAIL_CREDENTIALS"),
         mail=_read_mail(env),
     )

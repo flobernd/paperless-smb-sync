@@ -45,6 +45,7 @@ class FakeSession:
 
 
 BASE = "http://paperless:8000"
+CONSUME = "/usr/src/paperless/consume"
 
 
 def page(results, next_url=None):
@@ -53,7 +54,7 @@ def page(results, next_url=None):
 
 def make_client(routes):
     session = FakeSession(routes)
-    return PaperlessClient(BASE, "tok", session=session), session
+    return PaperlessClient(BASE, "tok", CONSUME, session=session), session
 
 
 def test_fetch_desired_users_filters_by_group():
@@ -172,13 +173,43 @@ def test_fetch_managed_workflows_filters_prefix():
         {
             f"{BASE}/api/workflows/": page(
                 [
-                    {"id": 7, "name": "[smb-sync] alice"},
+                    {
+                        "id": 7,
+                        "name": "[smb-sync] alice",
+                        "triggers": [{"filter_path": "*/alice/*"}],
+                    },
                     {"id": 8, "name": "my manual workflow"},
                 ]
             )
         }
     )
-    assert client.fetch_managed_workflows() == [ManagedWorkflow(7, "alice")]
+    assert client.fetch_managed_workflows() == [
+        ManagedWorkflow(7, "alice", "*/alice/*")
+    ]
+
+
+def test_workflow_without_exactly_one_trigger_reads_as_an_empty_filter():
+    client, _ = make_client(
+        {
+            f"{BASE}/api/workflows/": page(
+                [
+                    {"id": 7, "name": "[smb-sync] alice", "triggers": []},
+                    {
+                        "id": 8,
+                        "name": "[smb-sync] bob",
+                        "triggers": [
+                            {"filter_path": "/usr/src/paperless/consume/bob/*"},
+                            {"filter_path": "*/bob/*"},
+                        ],
+                    },
+                ]
+            )
+        }
+    )
+    assert client.fetch_managed_workflows() == [
+        ManagedWorkflow(7, "alice", ""),
+        ManagedWorkflow(8, "bob", ""),
+    ]
 
 
 def test_create_workflow_payload():
@@ -190,7 +221,7 @@ def test_create_workflow_payload():
     trigger = payload["triggers"][0]
     assert trigger["type"] == 1
     assert trigger["sources"] == [1]
-    assert trigger["filter_path"] == "*/alice/*"
+    assert trigger["filter_path"] == "/usr/src/paperless/consume/alice/*"
     action = payload["actions"][0]
     assert action["type"] == 1
     assert action["assign_owner"] == 5
@@ -200,16 +231,18 @@ def test_create_workflow_payload():
 
 def test_delete_workflow_tolerates_404():
     session = FakeSession({}, delete_status=404)
-    client = PaperlessClient(BASE, "tok", session=session)
+    client = PaperlessClient(BASE, "tok", CONSUME, session=session)
     client.delete_workflow(7)
     assert session.requests == [("DELETE", f"{BASE}/api/workflows/7/", None)]
 
 
-def test_rename_workflow_puts_full_payload():
+def test_update_workflow_puts_full_payload():
     client, session = make_client({})
-    client.rename_workflow(7, 5, "dave")
+    client.update_workflow(7, 5, "dave")
     method, url, payload = session.requests[0]
     assert (method, url) == ("PUT", f"{BASE}/api/workflows/7/")
     assert payload["name"] == "[smb-sync] dave"
-    assert payload["triggers"][0]["filter_path"] == "*/dave/*"
+    assert (
+        payload["triggers"][0]["filter_path"] == "/usr/src/paperless/consume/dave/*"
+    )
     assert payload["actions"][0]["assign_owner"] == 5

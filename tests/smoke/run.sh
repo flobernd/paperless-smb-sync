@@ -48,6 +48,25 @@ one_document_owned() {
     jq -e --argjson owner "$2" '.count == 1 and .results[0].owner == $owner' \
         <<<"$documents" >/dev/null
 }
+one_document() {
+    local documents
+    documents=$(api "$API/api/documents/?title__iexact=$1") || return
+    jq -e '.count == 1' <<<"$documents" >/dev/null
+}
+# paperless adds up the rights of every workflow that matches a scan, so a
+# second matching workflow shows up as a second user with the view right
+owned_alone() {
+    local documents
+    documents=$(api "$API/api/documents/?title__iexact=$1&full_perms=true") || return
+    jq -e --argjson user "$2" '.count == 1 and .results[0].owner == $user
+        and .results[0].permissions.view.users == [$user]' <<<"$documents" >/dev/null
+}
+has_workflow() {
+    local workflows
+    workflows=$(api "$API/api/workflows/") || return
+    jq -e --arg name "[smb-sync] $1" 'any(.results[]; .name == $name)' \
+        <<<"$workflows" >/dev/null
+}
 
 cleanup() { compose down -v --remove-orphans >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -76,7 +95,9 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then fail "could not obtain API tok
 export SMOKE_TOKEN=$TOKEN
 
 echo "== creating group and user =="
-GROUP_ID=$(api -X POST "$API/api/groups/" -d '{"name":"smb","permissions":[]}' | jq -r .id)
+GROUP_ID=$(api -X POST "$API/api/groups/" \
+    -d '{"name":"smb","permissions":["view_document","change_document","delete_document"]}' \
+    | jq -r .id)
 USER_ID=$(api -X POST "$API/api/users/" \
     -d "{\"username\":\"carol\",\"password\":\"paperless-pass\",\"groups\":[$GROUP_ID]}" | jq -r .id)
 
@@ -105,6 +126,33 @@ wait_for "smoke.txt was not imported as a document of carol" one_document_owned 
 echo "== asserting regen =="
 REGEN=$(compose exec -T smb smb-sync regen carol) || fail "regen failed"
 grep -q "Password:" <<<"$REGEN" || fail "regen failed"
+
+echo "== asserting the owner of a scan in a subfolder =="
+DAVE_ID=$(api -X POST "$API/api/users/" \
+    -d "{\"username\":\"dave\",\"password\":\"paperless-pass\",\"groups\":[$GROUP_ID]}" | jq -r .id)
+wait_for "inbox folder of dave did not appear" compose exec -T smb test -d /shares/inbox/dave
+DAVE_PASSWORD=$(compose logs smb | grep -A4 "SMB credentials for 'dave'" \
+    | awk '/Password:/{print $NF}' | tail -1) || true
+[ -n "$DAVE_PASSWORD" ] || fail "credentials block of dave not found in logs"
+# a scan that reaches paperless before the workflow exists gets no owner
+wait_for "workflow of dave did not appear" has_workflow dave
+# paperless misses a file written before its watcher has caught up with a new
+# folder, so the folder is made in a call of its own
+compose exec -T smb mkdir -m 2770 /shares/inbox/dave/carol \
+    || fail "could not make the subfolder"
+compose exec -T smb sh -c 'echo "own scan" >/shares/inbox/dave/own.txt &&
+    echo "nested scan" >/shares/inbox/dave/carol/nested.txt' \
+    || fail "could not write the scans of dave"
+wait_for "nested.txt was not imported" one_document nested
+wait_for "own.txt was not imported" one_document own
+owned_alone own "$DAVE_ID" || fail "own.txt is not owned by dave alone"
+owned_alone nested "$DAVE_ID" || fail "nested.txt is not owned by dave alone"
+SEEN=$(as_user dave paperless-pass "$API/api/documents/?title__iexact=nested") \
+    || fail "dave could not list documents"
+jq -e '.count == 1' <<<"$SEEN" >/dev/null || fail "dave does not see nested.txt"
+SEEN=$(as_user carol paperless-pass "$API/api/documents/?title__iexact=nested") \
+    || fail "carol could not list documents"
+jq -e '.count == 0' <<<"$SEEN" >/dev/null || fail "carol sees nested.txt of dave"
 
 echo "== asserting deprovisioning =="
 api -X PATCH "$API/api/users/$USER_ID/" -d '{"groups":[]}' >/dev/null

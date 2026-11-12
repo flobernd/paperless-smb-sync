@@ -27,6 +27,7 @@ class InboxFolder:
 class ManagedWorkflow:
     id: int
     username: str
+    filter_path: str
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,13 @@ class RepairUnixAccount:
     uid: int
 
 
+@dataclass(frozen=True)
+class UpdateWorkflow:
+    workflow_id: int
+    user_id: int
+    username: str
+
+
 Action = (
     CreateAccount
     | CreateFolder
@@ -102,6 +110,7 @@ Action = (
     | EnableAccount
     | RenameUser
     | RepairUnixAccount
+    | UpdateWorkflow
 )
 
 
@@ -109,3 +118,10 @@ Action = (
 class Plan:
     actions: tuple[Action, ...]
     warnings: tuple[str, ...]
+
+
+def workflow_filter(consume_path: str, username: str) -> str:
+    # paperless matches the filter with fnmatch against the absolute path of
+    # the scan, and * there also matches /. Anchored at the consume path, it
+    # cannot match a folder of that name inside the inbox of another user.
+    return f"{consume_path}/{username}/*"

@@ -44,6 +44,21 @@ def test_poll_interval_must_be_one_or_more():
     assert load_config({**BASE_ENV, "POLL_INTERVAL": "1"}).poll_interval == 1
 
 
+def test_consume_path_must_be_a_plain_absolute_path():
+    with pytest.raises(ValueError, match="PAPERLESS_CONSUMPTION_DIR"):
+        load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "../consume"})
+    with pytest.raises(ValueError, match="PAPERLESS_CONSUMPTION_DIR"):
+        load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "/data/[scan]/consume"})
+    with pytest.raises(ValueError, match="PAPERLESS_CONSUMPTION_DIR"):
+        load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "/data//consume"})
+    with pytest.raises(ValueError, match="PAPERLESS_CONSUMPTION_DIR"):
+        load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "/data/x/../consume"})
+    with pytest.raises(ValueError, match="PAPERLESS_CONSUMPTION_DIR"):
+        load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "//data/consume"})
+    cfg = load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "/data/consume/"})
+    assert cfg.consume_path == "/data/consume"
+
+
 def test_missing_url_raises():
     with pytest.raises(ValueError, match="PAPERLESS_URL"):
         load_config({"PAPERLESS_API_TOKEN": "tok"})

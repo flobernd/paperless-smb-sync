@@ -35,7 +35,7 @@ def run_cycle(cfg: Config, api: PaperlessClient, system: SystemAdapter) -> bool:
         log.error("failed to read local state, skipping cycle: %s", exc)
         return False
 
-    result = plan_cycle(desired, actual, cfg.uid_base)
+    result = plan_cycle(desired, actual, cfg.uid_base, cfg.consume_path)
     for warning in result.warnings:
         log.warning("%s", warning)
     failures = execute(

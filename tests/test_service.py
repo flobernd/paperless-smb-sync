@@ -28,6 +28,7 @@ CFG = Config(
     paperless_gid=10000,
     share_name="inbox",
     smb_host="",
+    consume_path="/usr/src/paperless/consume",
     email_credentials=False,
     mail=NO_MAIL,
 )

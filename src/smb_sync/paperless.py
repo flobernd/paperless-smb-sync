@@ -2,7 +2,7 @@ from typing import Any
 
 import requests
 
-from .model import ManagedWorkflow, PaperlessUser
+from .model import ManagedWorkflow, PaperlessUser, workflow_filter
 
 WORKFLOW_PREFIX = "[smb-sync] "
 
@@ -19,7 +19,7 @@ class PaperlessError(Exception):
     pass
 
 
-def _workflow_payload(user_id: int, username: str) -> dict[str, Any]:
+def _workflow_payload(user_id: int, username: str, consume_path: str) -> dict[str, Any]:
     return {
         "name": f"{WORKFLOW_PREFIX}{username}",
         "order": 0,
@@ -28,7 +28,7 @@ def _workflow_payload(user_id: int, username: str) -> dict[str, Any]:
             {
                 "type": _TRIGGER_CONSUMPTION,
                 "sources": [_SOURCE_CONSUME_FOLDER],
-                "filter_path": f"*/{username}/*",
+                "filter_path": workflow_filter(consume_path, username),
             }
         ],
         "actions": [
@@ -42,11 +42,25 @@ def _workflow_payload(user_id: int, username: str) -> dict[str, Any]:
     }
 
 
+def _trigger_filter(workflow: dict[str, Any]) -> str:
+    # A workflow without exactly one trigger reads as no filter, so the planner
+    # sees a difference and the update puts back the one trigger of the daemon.
+    triggers = workflow["triggers"]
+    if len(triggers) != 1:
+        return ""
+    return triggers[0]["filter_path"] or ""
+
+
 class PaperlessClient:
     def __init__(
-        self, base_url: str, token: str, session: requests.Session | None = None
+        self,
+        base_url: str,
+        token: str,
+        consume_path: str,
+        session: requests.Session | None = None,
     ):
         self._base = base_url.rstrip("/")
+        self._consume_path = consume_path
         self._session = session or requests.Session()
         self._session.headers["Authorization"] = f"Token {token}"
 
@@ -119,7 +133,9 @@ class PaperlessClient:
         try:
             return [
                 ManagedWorkflow(
-                    id=w["id"], username=w["name"][len(WORKFLOW_PREFIX) :]
+                    id=w["id"],
+                    username=w["name"][len(WORKFLOW_PREFIX) :],
+                    filter_path=_trigger_filter(w),
                 )
                 for w in workflows
                 if w["name"].startswith(WORKFLOW_PREFIX)
@@ -129,18 +145,18 @@ class PaperlessClient:
 
     def create_workflow(self, user_id: int, username: str) -> None:
         self._send(
-            "POST", "/api/workflows/", json=_workflow_payload(user_id, username)
+            "POST",
+            "/api/workflows/",
+            json=_workflow_payload(user_id, username, self._consume_path),
         )
 
     def delete_workflow(self, workflow_id: int) -> None:
         # a workflow already removed by hand is converged, not an error
         self._send("DELETE", f"/api/workflows/{workflow_id}/", tolerate=(404,))
 
-    def rename_workflow(
-        self, workflow_id: int, user_id: int, new_username: str
-    ) -> None:
+    def update_workflow(self, workflow_id: int, user_id: int, username: str) -> None:
         self._send(
             "PUT",
             f"/api/workflows/{workflow_id}/",
-            json=_workflow_payload(user_id, new_username),
+            json=_workflow_payload(user_id, username, self._consume_path),
         )

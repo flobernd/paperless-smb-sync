@@ -34,6 +34,7 @@ CFG = Config(
     paperless_gid=10000,
     share_name="inbox",
     smb_host="",
+    consume_path="/usr/src/paperless/consume",
     email_credentials=False,
     mail=NO_MAIL,
 )
@@ -67,7 +68,9 @@ def test_format_status_table():
             SambaAccount("gone", 20009, True),
         ),
         folders=(InboxFolder("alice", 20005),),
-        workflows=(ManagedWorkflow(7, "alice"),),
+        workflows=(
+            ManagedWorkflow(7, "alice", "/usr/src/paperless/consume/alice/*"),
+        ),
     )
     output = format_status(desired, actual, 20000)
     lines = output.splitlines()
@@ -127,7 +130,9 @@ def test_regen_password_sets_and_prints(capsys):
 
 def test_main_sync_maps_cycle_result_to_exit_code(monkeypatch):
     monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
-    monkeypatch.setattr("smb_sync.cli.PaperlessClient", lambda url, token: object())
+    monkeypatch.setattr(
+        "smb_sync.cli.PaperlessClient", lambda url, token, consume: object()
+    )
     monkeypatch.setattr("smb_sync.cli.SystemAdapter", lambda root, gid: object())
     monkeypatch.setattr(
         "smb_sync.cli.run_cycle_locked", lambda cfg, api, system: True
@@ -141,7 +146,9 @@ def test_main_sync_maps_cycle_result_to_exit_code(monkeypatch):
 
 def test_main_regen_unknown_account(monkeypatch, capsys):
     monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
-    monkeypatch.setattr("smb_sync.cli.PaperlessClient", lambda url, token: object())
+    monkeypatch.setattr(
+        "smb_sync.cli.PaperlessClient", lambda url, token, consume: object()
+    )
     monkeypatch.setattr(
         "smb_sync.cli.SystemAdapter", lambda root, gid: FakeSystem(accounts=[])
     )
@@ -185,7 +192,9 @@ def test_main_logs_config_warnings(monkeypatch, caplog):
         "smb_sync.cli.load_config",
         lambda: replace(CFG, email_credentials=True),
     )
-    monkeypatch.setattr("smb_sync.cli.PaperlessClient", lambda url, token: None)
+    monkeypatch.setattr(
+        "smb_sync.cli.PaperlessClient", lambda url, token, consume: None
+    )
     monkeypatch.setattr("smb_sync.cli.SystemAdapter", lambda path, gid: None)
     monkeypatch.setattr("smb_sync.cli.run_daemon", lambda cfg, api, system: None)
     with caplog.at_level(logging.WARNING):

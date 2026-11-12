@@ -15,6 +15,7 @@ from .model import (
     PaperlessUser,
     RenameUser,
     RepairUnixAccount,
+    UpdateWorkflow,
 )
 from .mail import CredentialDelivery, deliver_credentials
 from .paperless import PaperlessClient
@@ -93,6 +94,11 @@ def _apply(
         case CreateWorkflow(user_id=user_id, username=username):
             api.create_workflow(user_id, username)
             log.info("created consumption workflow for '%s'", username)
+        case UpdateWorkflow(
+            workflow_id=workflow_id, user_id=user_id, username=username
+        ):
+            api.update_workflow(workflow_id, user_id, username)
+            log.info("updated consumption workflow for '%s'", username)
         case DeleteWorkflow(workflow_id=workflow_id):
             api.delete_workflow(workflow_id)
             log.info("deleted workflow %d", workflow_id)
@@ -132,7 +138,7 @@ def _apply(
             system.rename_inbox_folder(old, new)
             system.rename_samba_account(old, new, uid)
             if workflow_id is not None:
-                api.rename_workflow(workflow_id, user_id, new)
+                api.update_workflow(workflow_id, user_id, new)
             log.warning(
                 "renamed '%s' to '%s'; update the scanner profile folder path "
                 "manually",

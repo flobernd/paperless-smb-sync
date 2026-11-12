@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
     for warning in config_warnings(cfg):
         log.warning("%s", warning)
-    api = PaperlessClient(cfg.paperless_url, cfg.paperless_token)
+    api = PaperlessClient(cfg.paperless_url, cfg.paperless_token, cfg.consume_path)
     system = SystemAdapter(INBOX_ROOT, cfg.paperless_gid)
 
     if args.command == "run":

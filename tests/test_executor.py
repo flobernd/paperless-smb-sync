@@ -12,6 +12,7 @@ from smb_sync.model import (
     PaperlessUser,
     RenameUser,
     RepairUnixAccount,
+    UpdateWorkflow,
 )
 from smb_sync.mail import MailError
 from smb_sync.paperless import PaperlessError
@@ -73,8 +74,8 @@ class FakeApi:
     def delete_workflow(self, workflow_id):
         self.calls.append(("delete_workflow", workflow_id))
 
-    def rename_workflow(self, workflow_id, user_id, new_username):
-        self.calls.append(("rename_workflow", workflow_id, user_id, new_username))
+    def update_workflow(self, workflow_id, user_id, username):
+        self.calls.append(("update_workflow", workflow_id, user_id, username))
 
 
 class FakeDelivery:
@@ -132,6 +133,7 @@ def test_folder_workflow_and_state_actions():
         [
             CreateFolder(username="alice", uid=20005),
             CreateWorkflow(user_id=5, username="alice"),
+            UpdateWorkflow(workflow_id=7, user_id=5, username="alice"),
             DisableAccount(username="alice"),
             EnableAccount(username="alice"),
             DeleteWorkflow(workflow_id=7),
@@ -142,6 +144,7 @@ def test_folder_workflow_and_state_actions():
     assert ("disable_samba_account", "alice") in system.calls
     assert ("enable_samba_account", "alice") in system.calls
     assert ("create_workflow", 5, "alice") in api.calls
+    assert ("update_workflow", 7, 5, "alice") in api.calls
     assert ("delete_workflow", 7) in api.calls
 
 
@@ -207,7 +210,7 @@ def test_rename_sequence_and_workflow_update():
         ("rename_inbox_folder", "alice", "dave"),
         ("rename_samba_account", "alice", "dave", 20005),
     ]
-    assert api.calls == [("rename_workflow", 7, 5, "dave")]
+    assert api.calls == [("update_workflow", 7, 5, "dave")]
 
 
 def test_rename_without_workflow_skips_api():

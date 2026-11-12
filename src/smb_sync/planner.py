@@ -17,6 +17,8 @@ from .model import (
     Plan,
     RenameUser,
     RepairUnixAccount,
+    UpdateWorkflow,
+    workflow_filter,
 )
 
 # useradd-compatible names only; anything else is skipped with a warning
@@ -36,6 +38,7 @@ def _missing_resources(
     uid: int,
     folders_by_name: Mapping[str, InboxFolder],
     workflows_by_username: Mapping[str, ManagedWorkflow],
+    consume_path: str,
 ) -> list[Action]:
     actions: list[Action] = []
     # an existing folder is adopted rather than recreated; correcting its
@@ -43,13 +46,23 @@ def _missing_resources(
     folder = folders_by_name.get(user.username)
     if folder is None or folder.uid != uid:
         actions.append(CreateFolder(username=user.username, uid=uid))
-    if user.username not in workflows_by_username:
+    workflow = workflows_by_username.get(user.username)
+    if workflow is None:
         actions.append(CreateWorkflow(user_id=user.id, username=user.username))
+    elif workflow.filter_path != workflow_filter(consume_path, user.username):
+        actions.append(
+            UpdateWorkflow(
+                workflow_id=workflow.id, user_id=user.id, username=user.username
+            )
+        )
     return actions
 
 
 def plan_cycle(
-    desired: list[PaperlessUser], actual: ActualState, uid_base: int
+    desired: list[PaperlessUser],
+    actual: ActualState,
+    uid_base: int,
+    consume_path: str,
 ) -> Plan:
     actions: list[Action] = []
     warnings: list[str] = []
@@ -120,7 +133,9 @@ def plan_cycle(
                 continue
             actions.append(CreateAccount(user=user, uid=uid))
             actions.extend(
-                _missing_resources(user, uid, folders_by_name, workflows_by_username)
+                _missing_resources(
+                    user, uid, folders_by_name, workflows_by_username, consume_path
+                )
             )
             # smbpasswd -a creates the account enabled
             actions.extend(_state_change(user.username, True, user.is_active))
@@ -133,7 +148,9 @@ def plan_cycle(
             actions.append(
                 RepairUnixAccount(username=user.username, uid=account.uid)
             )
-        missing = _missing_resources(user, uid, folders_by_name, workflows_by_username)
+        missing = _missing_resources(
+            user, uid, folders_by_name, workflows_by_username, consume_path
+        )
         if account.uid != uid:
             warnings.append(
                 f"account '{user.username}' has uid {account.uid}, expected {uid}; "

@@ -16,6 +16,8 @@ from .model import (
 DOCUMENT_PREFIX = "[smb-sync] credentials "
 WORKFLOW_PREFIX = "[smb-sync] "
 
+_CREDENTIALS_FILE = "smb-credentials.txt"
+
 # Until the hand-over the title carries the id of the user, since a rename can
 # come between the upload and the end of its background import.
 _DOCUMENT_TITLE = re.compile(
@@ -84,8 +86,11 @@ def _trigger_filter(workflow: dict[str, Any]) -> str:
 
 
 def _credential_document(record: dict[str, Any]) -> CredentialDocument | None:
+    # Each user who can change a document can give it such a title, and the
+    # daemon deletes with the token of a superuser. The API cannot change the
+    # file name of an upload, so the file name marks an upload of the daemon.
     match = _DOCUMENT_TITLE.fullmatch(record["title"])
-    if match is None:
+    if match is None or record["original_file_name"] != _CREDENTIALS_FILE:
         return None
     user_id = match["user_id"]
     return CredentialDocument(
@@ -97,7 +102,7 @@ def _credential_document(record: dict[str, Any]) -> CredentialDocument | None:
 
 
 def _block_file(block: str) -> dict[str, tuple[str, bytes, str]]:
-    return {"document": ("smb-credentials.txt", block.encode("utf-8"), "text/plain")}
+    return {"document": (_CREDENTIALS_FILE, block.encode("utf-8"), "text/plain")}
 
 
 class PaperlessClient:
@@ -126,12 +131,23 @@ class PaperlessClient:
             url = path
         else:
             url = f"{self._base}{path}"
+        # requests repeats a redirected POST as a GET, so a write would report
+        # success and never happen
+        follow = method == "GET"
         try:
-            response = self._session.request(method, url, timeout=_TIMEOUT, **kwargs)
+            response = self._session.request(
+                method, url, timeout=_TIMEOUT, allow_redirects=follow, **kwargs
+            )
             if response.status_code not in tolerate:
                 response.raise_for_status()
         except requests.RequestException as exc:
             raise PaperlessError(f"{method} {url} failed: {exc}") from exc
+        if not follow and 300 <= response.status_code < 400:
+            raise PaperlessError(
+                f"{method} {url} was redirected to "
+                f"{response.headers.get('Location')}. Set PAPERLESS_URL to the "
+                f"address that paperless answers on."
+            )
         return response
 
     def _get_all(
@@ -257,7 +273,11 @@ class PaperlessClient:
         # returns every document, so the title is compared here. The text of a
         # document holds a valid password, so it stays out of the listing.
         records = self._get_all(
-            path, {"title__istartswith": DOCUMENT_PREFIX, "fields": "id,owner,title"}
+            path,
+            {
+                "title__istartswith": DOCUMENT_PREFIX,
+                "fields": "id,original_file_name,owner,title",
+            },
         )
         with _unexpected_body(path):
             documents = [_credential_document(r) for r in records]

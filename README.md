@@ -84,8 +84,11 @@ administrator reading the log can resolve but the user reading the document cann
 `smb-sync regen` first sets the rights of the document back to the user alone, which ends a share that the user set on
 it. It then puts the new block on the same document as a new version. Earlier versions stay in the history of the
 document, with passwords that Samba rejects. When the user is renamed, the daemon changes the title of the document and
-adds a note. When the account goes, the daemon deletes the document and empties it from the trash. It also deletes a
-credentials document that has no owner, since each paperless user can read such a document.
+adds a note. While the option is on and the token belongs to a superuser, the daemon deletes the document when the
+account goes and empties it from the trash. Under the same condition it also deletes a credentials document that has no
+owner, since each paperless user can read such a document. The daemon counts a document as a credentials document only
+when it has such a title and the file name `smb-credentials.txt` of its upload, which the API cannot change, so a
+document that a user retitled stays.
 
 A paperless workflow that assigns an owner or rights to documents uploaded through the API, or to documents that are
 updated, can give the password to another user. Keep the credentials documents out of such a workflow. An upload that
@@ -160,7 +163,7 @@ All configuration is via environment variables, read in `src/smb_sync/config.py`
 | `PAPERLESS_API_TOKEN` / `PAPERLESS_API_TOKEN_FILE` | required (one of the two) | API token, given directly or as a path to a file containing it. Setting both is a startup error. |
 | `PAPERLESS_CONSUMPTION_DIR` | `/usr/src/paperless/consume` | The consumption directory as the paperless container sees it, which starts the filter of each managed workflow. An absolute path with none of the pattern characters `*`, `?`, `[`, and `]`, and with no `//`, `.`, or `..` part. |
 | `PAPERLESS_GID` | `10000` | GID of the shared `paperless` group that owns each inbox folder. |
-| `PAPERLESS_URL` | required | Base URL of the paperless instance, e.g. `http://webserver:8000`. |
+| `PAPERLESS_URL` | required | Base URL of the paperless instance, e.g. `http://webserver:8000`. It has to be the address that paperless answers on without a redirect, since the daemon stops a write that gets one. |
 | `POLL_INTERVAL` | `30` | Seconds between reconcile cycles, 1 or more. |
 | `SHARE_NAME` | `inbox` | Name of the exported SMB share. |
 | `SMB_HOST` | empty | Hostname or IP shown in the credentials block (provisioning log, `smb-sync regen` output, and credentials document). It is for display only and does not affect how the share is served. |

@@ -1,3 +1,6 @@
+import http.server
+import threading
+
 import pytest
 
 from smb_sync.model import CredentialDocument, ManagedWorkflow, PaperlessUser
@@ -205,6 +208,45 @@ def test_create_workflow_payload():
     assert action["assign_change_users"] == [5]
 
 
+def test_a_redirected_write_fails():
+    # a real session, since the session fake cannot follow a redirect
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(("GET", self.path))
+            body = b'{"count": 0, "next": null, "previous": null, "results": []}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            seen.append(("POST", self.path))
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(301)
+            self.send_header("Location", f"{url}{self.path}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    url = f"http://127.0.0.1:{server.server_port}"
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        with pytest.raises(PaperlessError):
+            PaperlessClient(url, "token", CONSUME).create_workflow(5, "alice")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert seen == [("POST", "/api/workflows/")]
+
+
 def test_delete_workflow_tolerates_404():
     session = FakeSession({}, delete_status=404)
     client = PaperlessClient(BASE, "tok", CONSUME, session=session)
@@ -222,15 +264,45 @@ def test_update_workflow_puts_full_payload():
     assert payload["actions"][0]["assign_owner"] == 5
 
 
+UPLOAD = "smb-credentials.txt"
+
+
 def test_only_the_exact_title_forms_make_a_credentials_document():
     client, _ = make_client(
         {
             f"{BASE}/api/documents/": page(
                 [
-                    {"id": 40, "title": "[smb-sync] credentials alice", "owner": 5},
-                    {"id": 41, "title": "[SMB-SYNC] Credentials bob", "owner": None},
-                    {"id": 42, "title": "[smb-sync] credentials bob (user 6)", "owner": 1},
-                    {"id": 43, "title": "[smb-sync] credentials alice copy", "owner": 5},
+                    {
+                        "id": 40,
+                        "title": "[smb-sync] credentials alice",
+                        "owner": 5,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 41,
+                        "title": "[SMB-SYNC] Credentials bob",
+                        "owner": None,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 42,
+                        "title": "[smb-sync] credentials bob (user 6)",
+                        "owner": 1,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 43,
+                        "title": "[smb-sync] credentials alice copy",
+                        "owner": 5,
+                        "original_file_name": UPLOAD,
+                    },
+                    # a title that a user with the change right gave a scan
+                    {
+                        "id": 44,
+                        "title": "[smb-sync] credentials carol",
+                        "owner": None,
+                        "original_file_name": "scan.pdf",
+                    },
                 ]
             )
         }
@@ -246,11 +318,36 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
         {
             f"{BASE}/api/trash/": page(
                 [
-                    {"id": 40, "title": "[smb-sync] credentials alice", "owner": 5},
-                    {"id": 41, "title": "[smb-sync] credentials alice (user 5)", "owner": 1},
-                    {"id": 42, "title": "[smb-sync] credentials bob", "owner": 6},
-                    {"id": 43, "title": "invoice", "owner": 5},
-                    {"id": 44, "title": "[smb-sync] credentials dave", "owner": 5},
+                    {
+                        "id": 40,
+                        "title": "[smb-sync] credentials alice",
+                        "owner": 5,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 41,
+                        "title": "[smb-sync] credentials alice (user 5)",
+                        "owner": 1,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 42,
+                        "title": "[smb-sync] credentials bob",
+                        "owner": 6,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 43,
+                        "title": "invoice",
+                        "owner": 5,
+                        "original_file_name": UPLOAD,
+                    },
+                    {
+                        "id": 44,
+                        "title": "[smb-sync] credentials dave",
+                        "owner": 5,
+                        "original_file_name": UPLOAD,
+                    },
                 ]
             )
         }

@@ -321,6 +321,19 @@ def test_skipped_inactive_user_has_the_entry_of_its_uid_disabled(username, unix_
     assert planned(desired, actual).actions == (DisableAccount(username="alice"),)
 
 
+def test_skipped_inactive_user_has_each_entry_of_its_uid_disabled():
+    # a rename from alice to dave that stopped before the old entry went
+    desired = [PaperlessUser(5, "Bad Name", False)]
+    actual = state(
+        accounts=(SambaAccount("alice", 20005, True), SambaAccount("dave", 20005, True)),
+    )
+    plan = planned(desired, actual)
+    assert plan.actions == (
+        DisableAccount(username="alice"),
+        DisableAccount(username="dave"),
+    )
+
+
 def test_rename_with_deactivation_disables_new_name():
     desired = [PaperlessUser(5, "dave", False)]
     plan = planned(desired, provisioned_state(username="alice", enabled=True))

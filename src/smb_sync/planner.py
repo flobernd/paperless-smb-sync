@@ -65,14 +65,18 @@ def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
 
 
 def _skipped_state_change(
-    user: PaperlessUser, uid: int, accounts_by_uid: Mapping[int, ManagedAccount]
+    user: PaperlessUser, uid: int, counted: Iterable[ManagedAccount]
 ) -> list[Action]:
     # A user that the planner skips can still hold a login under an earlier
-    # name, and a deactivation has to close it.
-    holder = accounts_by_uid.get(uid)
-    if holder is None:
-        return []
-    return _state_change(holder.username, holder.enabled, user.is_active)
+    # name, and a deactivation has to close it. A rename that stopped leaves
+    # the old and the new entry with the uid, and a restore gives the unix
+    # account to the entry listed first, so each of them changes.
+    return [
+        action
+        for holder in counted
+        if holder.uid == uid
+        for action in _state_change(holder.username, holder.enabled, user.is_active)
+    ]
 
 
 def _missing_folder(
@@ -201,9 +205,7 @@ def plan_cycle(
                 f"user '{user.username}' is not a valid unix account name and "
                 f"was skipped. Rename the user in paperless to provision it."
             )
-            actions.extend(
-                _skipped_state_change(user, uid_base + user.id, accounts_by_uid)
-            )
+            actions.extend(_skipped_state_change(user, uid_base + user.id, counted))
 
     folders_by_name = {f.name: f for f in actual.folders}
     workflows_by_username = {w.username: w for w in actual.workflows}
@@ -230,7 +232,7 @@ def plan_cycle(
                     f"(uid {taken_uid}) and was skipped. Rename the user in "
                     f"paperless to provision it."
                 )
-                actions.extend(_skipped_state_change(user, uid, accounts_by_uid))
+                actions.extend(_skipped_state_change(user, uid, counted))
                 continue
             holder = accounts_by_uid.get(uid)
             if holder is not None and holder.username not in desired_names:

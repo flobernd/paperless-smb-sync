@@ -429,7 +429,7 @@ def test_rename_with_reactivation_enables_the_old_name_then_the_new_name():
 ADMIN = TokenUser(1, True)
 
 
-def test_pending_document_goes_to_the_user_with_its_id():
+def test_pending_document_goes_to_the_user_with_its_id_and_keeps_its_name():
     # uploaded for user 5 under the name alice, who is dave now, while user 9 took the name alice
     desired = [PaperlessUser(5, "dave", True), PaperlessUser(9, "alice", True)]
     actual = state(
@@ -441,7 +441,7 @@ def test_pending_document_goes_to_the_user_with_its_id():
         documents=(CredentialDocument(40, "alice", 1, recipient_id=5),),
     )
     assert planned(desired, actual).actions == (
-        HandOverDocument(document_id=40, user_id=5, username="dave"),
+        HandOverDocument(document_id=40, user_id=5, username="alice"),
     )
 
 

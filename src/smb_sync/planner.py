@@ -157,8 +157,14 @@ def _document_action(
         # upload was made for
         user = users_by_id.get(document.recipient_id)
         if user is not None:
+            # The title keeps the name that the text of the upload shows. When
+            # the user has another name by now, the next cycle sees a title
+            # that differs from the name of the owner and retitles the
+            # document with a note.
             return HandOverDocument(
-                document_id=document.id, user_id=user.id, username=user.username
+                document_id=document.id,
+                user_id=user.id,
+                username=document.username,
             )
         # while an entry stores the uid, the removal of that account takes the
         # document

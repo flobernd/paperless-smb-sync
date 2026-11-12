@@ -155,11 +155,15 @@ def regen_password(
         )
         return 1
     stored_uid = None if account is None else counted_uid(account, cfg.uid_base)
-    if stored_uid is None:
+    if account is None or stored_uid is None:
         print(f"no managed samba account '{username}'", file=sys.stderr)
         return 1
     password = generate_password()
     system.set_samba_password(username, password, create=False)
+    if not account.enabled:
+        # smbpasswd clears the disabled flag of an entry when it sets the
+        # password, which would open the login of an inactive user
+        system.disable_samba_account(username)
     print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
     if cfg.credentials_document:
         _update_document(cfg, api, username, stored_uid - cfg.uid_base, password)

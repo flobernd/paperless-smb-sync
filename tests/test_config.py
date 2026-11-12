@@ -44,6 +44,13 @@ def test_poll_interval_must_be_one_or_more():
     assert load_config({**BASE_ENV, "POLL_INTERVAL": "1"}).poll_interval == 1
 
 
+def test_credentials_document_must_be_a_known_flag_value():
+    with pytest.raises(ValueError, match="CREDENTIALS_DOCUMENT"):
+        load_config({**BASE_ENV, "CREDENTIALS_DOCUMENT": "ture"})
+    cfg = load_config({**BASE_ENV, "CREDENTIALS_DOCUMENT": "False"})
+    assert cfg.credentials_document is False
+
+
 def test_consume_path_must_be_a_plain_absolute_path():
     with pytest.raises(ValueError, match="PAPERLESS_CONSUMPTION_DIR"):
         load_config({**BASE_ENV, "PAPERLESS_CONSUMPTION_DIR": "../consume"})

@@ -31,9 +31,9 @@ The daemon logs each warning when its cause first appears, and again once per ho
 ### Start and health
 
 The container exits at start when its configuration is not valid: `PAPERLESS_URL` is missing, the token is missing or
-empty or cannot be read, both token variables are set, a numeric setting is not a number, `POLL_INTERVAL` is below 1, or
-`PAPERLESS_CONSUMPTION_DIR` is not valid. It also exits when Samba rejects the merged `smb.conf`, as described under
-Custom Samba configuration below.
+empty or cannot be read, both token variables are set, a numeric setting is not a number, `POLL_INTERVAL` is below 1,
+`CREDENTIALS_DOCUMENT` has an unknown value, or `PAPERLESS_CONSUMPTION_DIR` is not valid. It also exits when Samba
+rejects the merged `smb.conf`, as described under Custom Samba configuration below.
 
 `docker ps` shows a health state. The container turns unhealthy when the daemon has completed no cycle for three poll
 intervals, or for three minutes when that is longer. Docker shows that state after three failed checks, which run 30
@@ -159,7 +159,7 @@ All configuration is via environment variables, read in `src/smb_sync/config.py`
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `CREDENTIALS_DOCUMENT` | `false` | Upload each credentials block to paperless as a document for the user, in addition to printing it. Needs the token of a superuser. |
+| `CREDENTIALS_DOCUMENT` | `false` | Upload each credentials block to paperless as a document for the user, in addition to printing it. Needs the token of a superuser. `1`, `true`, `yes`, and `on` turn it on, `0`, `false`, `no`, and `off` turn it off, in any case, and any other value stops the start. |
 | `PAPERLESS_API_TOKEN` / `PAPERLESS_API_TOKEN_FILE` | required (one of the two) | API token, given directly or as a path to a file containing it. Setting both is a startup error. |
 | `PAPERLESS_CONSUMPTION_DIR` | `/usr/src/paperless/consume` | The consumption directory as the paperless container sees it, which starts the filter of each managed workflow. An absolute path with none of the pattern characters `*`, `?`, `[`, and `]`, and with no `//`, `.`, or `..` part. |
 | `PAPERLESS_GID` | `10000` | GID of the shared `paperless` group that owns each inbox folder. |

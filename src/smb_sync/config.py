@@ -37,7 +37,15 @@ def _read_token(env: Mapping[str, str]) -> str:
 
 
 def _read_bool(env: Mapping[str, str], name: str) -> bool:
-    return env.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+    raw = env.get(name, "")
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"", "0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{name} must be one of 1, true, yes, on, 0, false, no and off, got {raw!r}"
+    )
 
 
 def _read_int(

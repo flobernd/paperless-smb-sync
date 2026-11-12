@@ -41,6 +41,9 @@ class FakeSystem:
     def set_samba_password(self, username, password, create=False):
         self.calls.append((username, password, create))
 
+    def disable_samba_account(self, username):
+        self.calls.append(("disable_samba_account", username))
+
 
 CONSUME = "/usr/src/paperless/consume"
 
@@ -111,6 +114,18 @@ def test_regen_password_sets_and_prints(capsys):
     out = capsys.readouterr().out
     assert "SMB credentials for 'alice'" in out
     assert password in out
+
+
+def test_regen_keeps_a_disabled_login_closed():
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, False)])
+    assert regen_password(CFG, system, "alice", object()) == 0
+    (username, _, create), disable = system.calls
+    assert (username, create) == ("alice", False)
+    assert disable == ("disable_samba_account", "alice")
+    # an open login stays open
+    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    assert regen_password(CFG, system, "alice", object()) == 0
+    assert len(system.calls) == 1
 
 
 def test_main_sync_maps_cycle_result_to_exit_code(monkeypatch):

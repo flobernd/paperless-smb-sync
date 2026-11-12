@@ -28,7 +28,6 @@ CFG = Config(
     paperless_gid=10000,
     share_name="inbox",
     smb_host="",
-    inbox_path="/shares/inbox",
     email_credentials=False,
     mail=NO_MAIL,
 )

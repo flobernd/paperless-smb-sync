@@ -24,7 +24,6 @@ class Config:
     paperless_gid: int
     share_name: str
     smb_host: str
-    inbox_path: str
     email_credentials: bool
     mail: MailConfig
 
@@ -52,13 +51,28 @@ def _read_bool(env: Mapping[str, str], name: str) -> bool:
     return env.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _read_int(
+    env: Mapping[str, str], name: str, default: int, minimum: int | None = None
+) -> int:
+    raw = env.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be {minimum} or more, got {value}")
+    return value
+
+
 def _read_mail(env: Mapping[str, str]) -> MailConfig:
     # deliberately the paperless-ngx variable names, so an existing mail setup
     # can be shared with this container instead of configured twice
     login = env.get("PAPERLESS_EMAIL_HOST_USER", "")
     return MailConfig(
         host=env.get("PAPERLESS_EMAIL_HOST", ""),
-        port=int(env.get("PAPERLESS_EMAIL_PORT", "25")),
+        port=_read_int(env, "PAPERLESS_EMAIL_PORT", 25),
         username=login,
         password=env.get("PAPERLESS_EMAIL_HOST_PASSWORD", ""),
         use_tls=_read_bool(env, "PAPERLESS_EMAIL_USE_TLS"),
@@ -86,12 +100,11 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         paperless_url=url,
         paperless_token=_read_token(env),
         sync_group=env.get("SYNC_GROUP", "smb"),
-        poll_interval=int(env.get("POLL_INTERVAL", "30")),
-        uid_base=int(env.get("UID_BASE", "20000")),
-        paperless_gid=int(env.get("PAPERLESS_GID", "10000")),
+        poll_interval=_read_int(env, "POLL_INTERVAL", 30, minimum=1),
+        uid_base=_read_int(env, "UID_BASE", 20000),
+        paperless_gid=_read_int(env, "PAPERLESS_GID", 10000),
         share_name=env.get("SHARE_NAME", "inbox"),
         smb_host=env.get("SMB_HOST", ""),
-        inbox_path=env.get("INBOX_PATH", "/shares/inbox"),
         email_credentials=_read_bool(env, "EMAIL_CREDENTIALS"),
         mail=_read_mail(env),
     )

@@ -23,7 +23,6 @@ def test_overrides():
             "PAPERLESS_GID": "12000",
             "SHARE_NAME": "scans",
             "SMB_HOST": "nas.lan",
-            "INBOX_PATH": "/tmp/inbox",
         }
     )
     assert cfg.sync_group == "scanner"
@@ -32,7 +31,17 @@ def test_overrides():
     assert cfg.paperless_gid == 12000
     assert cfg.share_name == "scans"
     assert cfg.smb_host == "nas.lan"
-    assert cfg.inbox_path == "/tmp/inbox"
+
+
+def test_invalid_integer_names_the_variable():
+    with pytest.raises(ValueError, match="POLL_INTERVAL"):
+        load_config({**BASE_ENV, "POLL_INTERVAL": "soon"})
+
+
+def test_poll_interval_must_be_one_or_more():
+    with pytest.raises(ValueError, match="POLL_INTERVAL"):
+        load_config({**BASE_ENV, "POLL_INTERVAL": "0"})
+    assert load_config({**BASE_ENV, "POLL_INTERVAL": "1"}).poll_interval == 1
 
 
 def test_missing_url_raises():

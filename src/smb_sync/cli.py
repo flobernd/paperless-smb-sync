@@ -9,7 +9,7 @@ from .mail import deliver_credentials, send_credentials
 from .model import UNMAPPED_UID, ActualState, PaperlessUser
 from .paperless import PaperlessClient, PaperlessError
 from .service import run_cycle_locked, run_daemon
-from .system import SystemAdapter
+from .system import INBOX_ROOT, SystemAdapter
 
 log = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     for warning in config_warnings(cfg):
         log.warning("%s", warning)
     api = PaperlessClient(cfg.paperless_url, cfg.paperless_token)
-    system = SystemAdapter(cfg.inbox_path, cfg.paperless_gid)
+    system = SystemAdapter(INBOX_ROOT, cfg.paperless_gid)
 
     if args.command == "run":
         run_daemon(cfg, api, system)

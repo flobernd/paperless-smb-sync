@@ -9,6 +9,10 @@ from pathlib import Path
 
 from .model import InboxFolder, SambaAccount
 
+# docker/entrypoint.sh and docker/smb.conf.template hard-code the same path, so
+# all three change together
+INBOX_ROOT = "/shares/inbox"
+
 
 class CommandError(Exception):
     pass

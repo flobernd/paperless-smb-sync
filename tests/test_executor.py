@@ -201,6 +201,26 @@ def test_removal_closes_the_login_before_the_workflow_step():
     assert system.calls == [("disable_samba_account", "alice")]
 
 
+def test_a_failed_document_purge_keeps_the_folder_and_the_entry():
+    # while the entry exists, the next cycle tries the removal again
+    api = FakeApi()
+
+    def refuse(username, document_ids):
+        raise PaperlessError("HTTP 500")
+
+    api.delete_credentials = refuse
+    failures, system, _ = run(
+        [
+            Deprovision(
+                username="alice", workflow_id=None, delete_folder=True, documents=(40,)
+            )
+        ],
+        api=api,
+    )
+    assert failures == 1
+    assert system.calls == [("disable_samba_account", "alice")]
+
+
 def test_rename_sequence_and_workflow_update():
     failures, system, api = run(
         [

@@ -487,6 +487,24 @@ def test_removal_takes_the_documents_of_that_account_only():
     )
 
 
+def test_removal_of_an_old_name_leaves_the_documents_of_the_renamed_user():
+    # a rename from alice to dave that stopped before the old entry went
+    desired = [PaperlessUser(5, "dave", True)]
+    actual = state(
+        accounts=(SambaAccount("alice", 20005, True), SambaAccount("dave", 20005, True)),
+        folders=(InboxFolder("dave", 20005),),
+        workflows=(workflow(7, "dave"),),
+        unix_uids={"dave": 20005},
+        token_user=ADMIN,
+        documents=(CredentialDocument(40, "dave", 5, recipient_id=None),),
+    )
+    assert planned(desired, actual).actions == (
+        Deprovision(
+            username="alice", workflow_id=None, delete_folder=False, documents=None
+        ),
+    )
+
+
 def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
     # the user of the token is in the sync group and leaves it
     desired = [PaperlessUser(6, "bob", True)]

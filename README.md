@@ -127,10 +127,10 @@ deactivate the paperless user instead of removing them from the group.
 
 The daemon deletes an inbox folder only together with the Samba account of its user, and only when the owner of the
 folder is the uid that the entry stores. A folder with no account stays in place, with a warning. One account goes per
-cycle, and the others wait for later cycles. The workflow of an account goes with the account, so a scan that reaches a
-waiting login still gets its owner. A removal closes the login first. The Samba entry goes after the workflow, the
-credentials document, and the folder, so a removal that fails before that step continues in a later cycle. The unix
-account goes last.
+cycle, and the others wait for later cycles. The workflow of an account goes with the account, so a scan that reaches
+the waiting login of a user who left the group still gets that user as its owner. A removal closes the login first. The
+Samba entry goes after the workflow, the credentials document, and the folder, so a removal that fails before that step
+continues in a later cycle. The unix account goes last.
 
 ### Username requirements
 

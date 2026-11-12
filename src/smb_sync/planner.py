@@ -379,7 +379,8 @@ def plan_cycle(
     # paperless imports a scan with or without a workflow, and the workflow
     # only sets the owner. So the workflow of an account that waits for its
     # removal goes inside that removal, after the login closed, and a scan
-    # that arrives while the login is still open still gets its owner.
+    # that arrives while the login of a user who left the group is still open
+    # still gets that user as its owner.
     for workflow in actual.workflows:
         if (
             workflow.username not in claimed_names

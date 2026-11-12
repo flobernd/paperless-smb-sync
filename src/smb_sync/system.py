@@ -147,7 +147,9 @@ class SystemAdapter:
         # idempotent so a retried deprovision after a partial failure succeeds
         if all(a.username != username for a in self.list_samba_accounts()):
             return
-        self._run(["smbpasswd", "-x", username])
+        # smbpasswd -x fails for an entry without a unix account, such as the
+        # old name of a rename that stopped before its last step
+        self._run(["pdbedit", "-x", "-u", username])
 
     def disable_samba_account(self, username: str) -> None:
         self._run(["smbpasswd", "-d", username])

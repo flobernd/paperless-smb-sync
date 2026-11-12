@@ -297,10 +297,10 @@ def test_rename_samba_account_missing_raises(tmp_path):
 def test_delete_samba_account_missing_is_noop(tmp_path):
     adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     adapter.delete_samba_account("ghost")
-    assert all(call[0][0] != "smbpasswd" for call in run.calls)
+    assert [c[0] for c in run.calls] == [("pdbedit", "-L", "-v")]
 
 
-def test_delete_samba_account_present_runs_smbpasswd(tmp_path):
+def test_delete_samba_account_present_runs_pdbedit(tmp_path):
     adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     adapter.delete_samba_account("alice")
-    assert run.calls[-1] == (("smbpasswd", "-x", "alice"), None)
+    assert run.calls[-1] == (("pdbedit", "-x", "-u", "alice"), None)

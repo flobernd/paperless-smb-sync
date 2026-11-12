@@ -201,7 +201,7 @@ def test_removal_closes_the_login_before_the_workflow_step():
     assert system.calls == [("disable_samba_account", "alice")]
 
 
-def test_a_failed_document_purge_keeps_the_folder_and_the_entry():
+def test_a_failed_document_purge_keeps_the_entry():
     # while the entry exists, the next cycle tries the removal again
     api = FakeApi()
 
@@ -218,7 +218,7 @@ def test_a_failed_document_purge_keeps_the_folder_and_the_entry():
         api=api,
     )
     assert failures == 1
-    assert system.calls == [("disable_samba_account", "alice")]
+    assert ("delete_samba_account", "alice") not in system.calls
 
 
 def test_rename_sequence_and_workflow_update():

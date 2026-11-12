@@ -45,7 +45,7 @@ class FakeSession:
 
 
 BASE = "http://paperless:8000"
-CONSUME = "/usr/src/paperless/consume"
+CONSUME = "/data/consume"
 
 
 def page(results, next_url=None):
@@ -174,7 +174,7 @@ def test_workflow_without_exactly_one_trigger_reads_as_an_empty_filter():
                         "id": 8,
                         "name": "[smb-sync] bob",
                         "triggers": [
-                            {"filter_path": "/usr/src/paperless/consume/bob/*"},
+                            {"filter_path": "/data/consume/bob/*"},
                             {"filter_path": "*/bob/*"},
                         ],
                     },
@@ -197,7 +197,7 @@ def test_create_workflow_payload():
     trigger = payload["triggers"][0]
     assert trigger["type"] == 1
     assert trigger["sources"] == [1]
-    assert trigger["filter_path"] == "/usr/src/paperless/consume/alice/*"
+    assert trigger["filter_path"] == "/data/consume/alice/*"
     action = payload["actions"][0]
     assert action["type"] == 1
     assert action["assign_owner"] == 5
@@ -218,9 +218,7 @@ def test_update_workflow_puts_full_payload():
     method, url, payload = session.requests[0]
     assert (method, url) == ("PUT", f"{BASE}/api/workflows/7/")
     assert payload["name"] == "[smb-sync] dave"
-    assert (
-        payload["triggers"][0]["filter_path"] == "/usr/src/paperless/consume/dave/*"
-    )
+    assert payload["triggers"][0]["filter_path"] == "/data/consume/dave/*"
     assert payload["actions"][0]["assign_owner"] == 5
 
 
@@ -265,3 +263,14 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
     ]
     client.delete_credentials("carol", [])
     assert len(session.requests) == 3
+
+
+def test_delete_document_also_empties_it_from_the_trash():
+    # a document that is already in the trash answers the DELETE with 404
+    session = FakeSession({}, delete_status=404)
+    client = PaperlessClient(BASE, "tok", CONSUME, session=session)
+    client.delete_document(40)
+    assert session.requests == [
+        ("DELETE", f"{BASE}/api/documents/40/", None),
+        ("POST", f"{BASE}/api/trash/", {"action": "empty", "documents": [40]}),
+    ]

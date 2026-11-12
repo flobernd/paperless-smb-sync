@@ -20,6 +20,10 @@ Account desc:
 Unix username:        desk
 Account Flags:        [U          ]
 Account desc:         Front desk scanner: do not delete
+---------------
+Unix username:        scanner
+Account Flags:        [U          ]
+Account desc:         smb-sync uid=20007 old scanner
 """
 
 
@@ -68,6 +72,7 @@ def test_listing_reads_the_stored_uid_of_each_entry(tmp_path):
         SambaAccount("alice", 20005, True),
         SambaAccount("bob", None, False),
         SambaAccount("desk", None, True),
+        SambaAccount("scanner", None, True),
     ]
 
 

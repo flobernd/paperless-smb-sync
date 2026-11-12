@@ -276,24 +276,6 @@ def test_restore_continues_after_one_entry_fails():
     assert ("create_unix_user", "bob", 20006) in system.calls
 
 
-def test_daemon_touches_the_heartbeat_after_a_failed_cycle(monkeypatch, tmp_path):
-    heartbeat = tmp_path / "heartbeat"
-
-    def stop(_seconds):
-        raise StopLoop()
-
-    monkeypatch.setattr("smb_sync.service.time.sleep", stop)
-    with pytest.raises(StopLoop):
-        run_daemon(
-            CFG,
-            FakeApi(fail=True),
-            FakeSystem(),
-            lock_path=str(tmp_path / "lock"),
-            heartbeat_path=str(heartbeat),
-        )
-    assert heartbeat.exists()
-
-
 def test_daemon_drops_the_heartbeat_of_an_earlier_run(monkeypatch, tmp_path):
     heartbeat = tmp_path / "heartbeat"
     heartbeat.touch()

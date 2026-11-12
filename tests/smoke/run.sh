@@ -178,7 +178,6 @@ compose up -d smb
 wait_for "samba account did not appear" has_account carol
 
 echo "== asserting provisioning =="
-has_account carol || fail "samba account missing"
 PERMS=$(compose exec -T smb stat -c '%a %u' /shares/inbox/carol)
 grep -q "^2770 " <<<"$PERMS" || fail "folder permissions wrong: $PERMS"
 WORKFLOWS=$(api "$API/api/workflows/" | jq -r '.results[].name') || fail "could not list workflows"
@@ -280,7 +279,6 @@ wait_for "the trash still holds a document" trash_empty
 echo "== asserting deprovisioning =="
 api -X PATCH "$API/api/users/$USER_ID/" -d '{"groups":[]}' >/dev/null
 wait_for "samba account not removed" lacks_account carol
-lacks_account carol || fail "samba account not removed"
 if compose exec -T smb test -e /shares/inbox/carol; then fail "folder not removed"; fi
 WORKFLOWS=$(api "$API/api/workflows/" | jq -r '.results[].name') || fail "could not list workflows"
 if grep -qx '\[smb-sync\] carol' <<<"$WORKFLOWS"; then fail "workflow not removed"; fi

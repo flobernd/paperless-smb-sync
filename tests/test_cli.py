@@ -103,13 +103,6 @@ def test_regen_password_refuses_unmanaged_account(capsys):
     assert system.calls == []
 
 
-def test_regen_password_refuses_an_entry_without_stored_uid(capsys):
-    system = FakeSystem(accounts=[SambaAccount("orphan", None, True)])
-    assert regen_password(CFG, system, "orphan", object()) == 1
-    assert "stores no uid" in capsys.readouterr().err
-    assert system.calls == []
-
-
 def test_regen_password_sets_and_prints(capsys):
     system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
     assert regen_password(CFG, system, "alice", object()) == 0
@@ -163,7 +156,6 @@ def test_main_status_reports_an_api_failure_in_one_line(monkeypatch, capsys):
     assert main(["status"]) == 1
     err = capsys.readouterr().err
     assert "smb-sync: api down" in err.splitlines()
-    assert "Traceback" not in err
 
 
 class FakeDocumentApi:

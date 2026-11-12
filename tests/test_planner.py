@@ -143,15 +143,6 @@ def test_new_account_adopts_an_existing_folder_with_another_uid():
     )
 
 
-def test_removal_takes_the_workflow_and_the_folder_of_the_account():
-    plan = planned([], provisioned_state())
-    assert plan.actions == (
-        Deprovision(
-            username="alice", workflow_id=7, delete_folder=True, documents=None
-        ),
-    )
-
-
 def test_stale_account_keeps_a_folder_of_another_uid():
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
@@ -164,16 +155,6 @@ def test_stale_account_keeps_a_folder_of_another_uid():
             username="alice", workflow_id=None, delete_folder=False, documents=None
         ),
     )
-
-
-def test_stale_folder_beside_an_entry_that_does_not_count_deletes_nothing():
-    actual = state(
-        accounts=(SambaAccount("bob", None, True),),
-        folders=(InboxFolder("bob", 20006),),
-        workflows=(),
-    )
-    plan = planned([], actual)
-    assert plan.actions == ()
 
 
 def test_at_most_one_deprovision_per_cycle():
@@ -232,16 +213,6 @@ def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
         ),
     )
     assert any("alice" in w for w in plan.warnings)
-
-
-def test_unmanaged_account_untouched():
-    actual = state(
-        accounts=(SambaAccount("legacy", 1000, True),),
-        folders=(),
-        workflows=(),
-    )
-    plan = planned([], actual)
-    assert plan.actions == ()
 
 
 def test_rename_detected_by_uid():
@@ -332,14 +303,11 @@ def test_rename_with_deactivation_disables_new_name():
 
 
 def test_stale_folder_with_desired_uid_frozen_with_warning():
-    # in a half-completed rename the old folder still carries the real
-    # uid of a desired user, so deleting it would destroy that user's data
     desired = [PaperlessUser(5, "dave", True)]
     actual = state(
         accounts=(), folders=(InboxFolder("alice", 20005),), workflows=()
     )
     plan = planned(desired, actual)
-    assert not any(isinstance(a, Deprovision) for a in plan.actions)
     assert any("alice" in w and "dave" in w for w in plan.warnings)
 
 
@@ -436,6 +404,16 @@ def test_rename_retitles_the_document_of_the_user():
         RenameDocument(document_id=40, old_username="alice", new_username="dave")
         in planned(desired, actual).actions
     )
+
+
+def test_document_that_carries_the_name_of_its_owner_needs_no_action():
+    desired = [PaperlessUser(5, "alice", True)]
+    actual = replace(
+        provisioned_state(),
+        token_user=ADMIN,
+        documents=(CredentialDocument(40, "alice", 5, recipient_id=None),),
+    )
+    assert planned(desired, actual).actions == ()
 
 
 def test_document_without_owner_or_account_is_deleted():

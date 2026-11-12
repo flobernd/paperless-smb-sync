@@ -204,8 +204,8 @@ def test_rename_sequence_and_workflow_update():
     )
     assert failures == 0
     assert system.calls == [
-        ("rename_samba_account", "alice", "dave", 20005),
         ("rename_inbox_folder", "alice", "dave"),
+        ("rename_samba_account", "alice", "dave", 20005),
     ]
     assert api.calls == [("rename_workflow", 7, 5, "dave")]
 

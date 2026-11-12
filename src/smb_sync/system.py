@@ -160,41 +160,46 @@ class SystemAdapter:
 
     def rename_samba_account(self, old: str, new: str, uid: int) -> None:
         # tdbsam cannot rename in place, so the hash line is re-imported
-        # under the new name and the old entry is deleted only after the
-        # import succeeded. Every step is guarded, so re-invoking after
-        # any interruption converges; a crash between usermod and import
-        # leaves the account unusable until the next attempt or a manual
-        # fix, but never deletes anything.
-        # Export from the full listing because pdbedit resolves uids via
-        # getpwnam and a half-completed rename leaves the old name
-        # unmapped (uid becomes 4294967295, and -u lookups fail).
+        # under the new name. Each step either checks whether an earlier call
+        # did it or can safely run again, so the next cycle finishes a rename
+        # that stopped anywhere.
+        # The unix account comes first because pdbedit imports a line only
+        # for a name that getpwnam resolves. It moves when the old name still
+        # holds it, since useradd refuses a second account with its uid.
+        # The old entry goes last: until the new entry stores the uid, the old
+        # one is how the planner finds the open rename, and without it the
+        # next cycle creates the account again with a new password.
+        # The hash line comes from the full listing because one call shows
+        # both names.
         output = self._run(["pdbedit", "-L", "-w"])
         lines = {
             line.split(":", 1)[0]: line
             for line in output.splitlines()
             if ":" in line
         }
-        if new in lines:
-            if old in lines:
-                self._run(["pdbedit", "-x", "-u", old])
-            return
-        if old not in lines:
+        if old not in lines and new not in lines:
             raise CommandError(f"samba account '{old}' not found")
-        parts = lines[old].split(":")
-        parts[0] = new
-        parts[1] = str(uid)  # exported uid is unreliable once getpwnam(old) fails
         if _unix_user(new) is None:
-            self._run(["usermod", "--login", new, old])
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", suffix=".smbpasswd"
-        ) as fh:
-            fh.write(":".join(parts) + "\n")
-            # pdbedit opens the file by name while this handle is still open
-            fh.flush()
-            self._run(["pdbedit", "-i", f"smbpasswd:{fh.name}"])
+            if _unix_user(old) is not None:
+                self._run(["usermod", "--login", new, old])
+            else:
+                self.create_unix_user(new, uid)
+        if new not in lines:
+            parts = lines[old].split(":")
+            parts[0] = new
+            parts[1] = str(uid)  # exported uid is unreliable once getpwnam(old) fails
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", suffix=".smbpasswd"
+            ) as fh:
+                fh.write(":".join(parts) + "\n")
+                # pdbedit opens the file by name while this handle is still open
+                fh.flush()
+                self._run(["pdbedit", "-i", f"smbpasswd:{fh.name}"])
         # the smbpasswd format has no description field to carry the uid over
+        # it fails if pdbedit -i refused the line with exit 0, so the old entry stays
         self.store_uid(new, uid)
-        self._run(["pdbedit", "-x", "-u", old])
+        if old in lines:
+            self._run(["pdbedit", "-x", "-u", old])
 
     # -- inbox folders -----------------------------------------------
 

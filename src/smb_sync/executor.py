@@ -126,8 +126,11 @@ def _apply(
             user_id=user_id,
             workflow_id=workflow_id,
         ):
-            system.rename_samba_account(old, new, uid)
+            # The folder moves first. Once the entry has the new name, the
+            # planner sees no open rename and gives the user a new empty folder
+            # beside the old one.
             system.rename_inbox_folder(old, new)
+            system.rename_samba_account(old, new, uid)
             if workflow_id is not None:
                 api.rename_workflow(workflow_id, user_id, new)
             log.warning(

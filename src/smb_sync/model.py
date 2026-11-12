@@ -61,13 +61,10 @@ class DeleteWorkflow:
 
 
 @dataclass(frozen=True)
-class DeleteAccount:
+class Deprovision:
     username: str
-
-
-@dataclass(frozen=True)
-class DeleteFolder:
-    username: str
+    workflow_id: int | None
+    delete_folder: bool
 
 
 @dataclass(frozen=True)
@@ -100,8 +97,7 @@ Action = (
     | CreateFolder
     | CreateWorkflow
     | DeleteWorkflow
-    | DeleteAccount
-    | DeleteFolder
+    | Deprovision
     | DisableAccount
     | EnableAccount
     | RenameUser

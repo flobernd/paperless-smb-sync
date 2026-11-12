@@ -7,9 +7,8 @@ from .model import (
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
-    DeleteAccount,
-    DeleteFolder,
     DeleteWorkflow,
+    Deprovision,
     DisableAccount,
     EnableAccount,
     InboxFolder,
@@ -147,34 +146,38 @@ def plan_cycle(
     # user's data even under a stale name (half-completed rename), so it
     # must never be deleted
     expected_uid_owner = {uid_base + u.id: u.username for u in valid}
+
+    stale_accounts = {
+        a.username: a.uid
+        for a in counted
+        if a.uid not in invalid_uids and a.username not in claimed_names
+    }
+
     for folder in actual.folders:
-        if folder.uid in expected_uid_owner and folder.name not in claimed_names:
+        if folder.name in claimed_names:
+            continue
+        if folder.uid < uid_base:
+            warnings.append(
+                f"unmanaged folder '{folder.name}' (uid {folder.uid}) left untouched"
+            )
+        elif folder.uid in expected_uid_owner:
             warnings.append(
                 f"folder '{folder.name}' has uid {folder.uid} belonging to "
                 f"user '{expected_uid_owner[folder.uid]}' (possibly an "
                 f"interrupted rename); left untouched"
             )
-
-    stale_accounts = {
-        a.username
-        for a in counted
-        if a.uid not in invalid_uids and a.username not in claimed_names
-    }
-    stale_folders = {
-        f.name
-        for f in actual.folders
-        if f.uid >= uid_base
-        and f.uid not in invalid_uids
-        and f.uid not in expected_uid_owner
-        and f.name not in claimed_names
-    }
-    for folder in actual.folders:
-        if folder.uid < uid_base and folder.name not in claimed_names:
+        elif (
+            folder.name not in accounts_by_name
+            or accounts_by_name[folder.name].uid != folder.uid
+        ):
+            # a folder alone does not prove that the daemon made it, so it
+            # goes only together with its account
             warnings.append(
-                f"unmanaged folder '{folder.name}' (uid {folder.uid}) left untouched"
+                f"folder '{folder.name}' (uid {folder.uid}) belongs to no managed "
+                f"samba account and was left untouched"
             )
 
-    candidates = sorted(stale_accounts | stale_folders)
+    candidates = sorted(stale_accounts)
     for name in candidates[1:]:
         warnings.append(
             f"deprovisioning of '{name}' deferred to a later cycle (one per cycle)"
@@ -182,12 +185,16 @@ def plan_cycle(
     deprovisioned = set(candidates[:1])
     for name in deprovisioned:
         workflow = workflows_by_username.get(name)
-        if workflow is not None:
-            actions.append(DeleteWorkflow(workflow_id=workflow.id))
-        if name in accounts_by_name:
-            actions.append(DeleteAccount(username=name))
-        if name in stale_folders:
-            actions.append(DeleteFolder(username=name))
+        inbox = folders_by_name.get(name)
+        actions.append(
+            Deprovision(
+                username=name,
+                workflow_id=workflow.id if workflow else None,
+                delete_folder=inbox is not None
+                and inbox.uid == stale_accounts[name]
+                and inbox.uid not in expected_uid_owner,
+            )
+        )
 
     # stray managed workflows only stop intake, so removing them all at once
     # is safe even when the matching account removal is deferred

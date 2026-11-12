@@ -3,9 +3,8 @@ from smb_sync.model import (
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
-    DeleteAccount,
-    DeleteFolder,
     DeleteWorkflow,
+    Deprovision,
     DisableAccount,
     EnableAccount,
     InboxFolder,
@@ -104,13 +103,33 @@ def test_migration_adopts_prexisting_folder_wrong_uid():
     )
 
 
-def test_deprovision_removes_workflow_account_folder_in_order():
+def test_removal_takes_the_workflow_and_the_folder_of_the_account():
     plan = plan_cycle([], provisioned_state(), UID_BASE)
     assert plan.actions == (
-        DeleteWorkflow(workflow_id=7),
-        DeleteAccount(username="alice"),
-        DeleteFolder(username="alice"),
+        Deprovision(username="alice", workflow_id=7, delete_folder=True),
     )
+
+
+def test_stale_account_keeps_a_folder_of_another_uid():
+    actual = ActualState(
+        accounts=(SambaAccount("alice", 20005, True),),
+        folders=(InboxFolder("alice", 20009),),
+        workflows=(),
+    )
+    plan = plan_cycle([], actual, UID_BASE)
+    assert plan.actions == (
+        Deprovision(username="alice", workflow_id=None, delete_folder=False),
+    )
+
+
+def test_stale_folder_beside_an_entry_that_does_not_count_deletes_nothing():
+    actual = ActualState(
+        accounts=(SambaAccount("bob", None, True),),
+        folders=(InboxFolder("bob", 20006),),
+        workflows=(),
+    )
+    plan = plan_cycle([], actual, UID_BASE)
+    assert plan.actions == ()
 
 
 def test_at_most_one_deprovision_per_cycle():
@@ -123,12 +142,13 @@ def test_at_most_one_deprovision_per_cycle():
         workflows=(ManagedWorkflow(7, "alice"), ManagedWorkflow(8, "bob")),
     )
     plan = plan_cycle([], actual, UID_BASE)
-    deleted = [a for a in plan.actions if isinstance(a, DeleteAccount)]
-    assert deleted == [DeleteAccount(username="alice")]
+    removals = [a for a in plan.actions if isinstance(a, Deprovision)]
+    assert removals == [
+        Deprovision(username="alice", workflow_id=7, delete_folder=True)
+    ]
     assert any("bob" in w and "deferred" in w for w in plan.warnings)
     # bob's workflow removal is non-destructive and not deferred
     assert DeleteWorkflow(workflow_id=8) in plan.actions
-    assert DeleteFolder(username="bob") not in plan.actions
 
 
 def test_unmanaged_account_untouched():
@@ -155,12 +175,13 @@ def test_rename_detected_by_uid():
     )
 
 
-def test_orphan_managed_folder_deleted():
+def test_folder_without_account_is_warned_not_deleted():
     actual = ActualState(
-        accounts=(), folders=(InboxFolder("ghost", 20009),), workflows=()
+        accounts=(), folders=(InboxFolder("archive", 65534),), workflows=()
     )
     plan = plan_cycle([], actual, UID_BASE)
-    assert plan.actions == (DeleteFolder(username="ghost"),)
+    assert plan.actions == ()
+    assert any("archive" in w for w in plan.warnings)
 
 
 def test_unmanaged_folder_warned_not_deleted():
@@ -175,7 +196,7 @@ def test_unmanaged_folder_warned_not_deleted():
 def test_uid_mismatch_warned_not_touched():
     desired = [PaperlessUser(6, "alice", True)]
     plan = plan_cycle(desired, provisioned_state(username="alice", user_id=5), UID_BASE)
-    assert not any(isinstance(a, (DeleteAccount, RenameUser)) for a in plan.actions)
+    assert not any(isinstance(a, (Deprovision, RenameUser)) for a in plan.actions)
     assert any("uid" in w.lower() for w in plan.warnings)
 
 
@@ -184,6 +205,7 @@ def test_invalid_rename_preserves_existing_resources():
     plan = plan_cycle(desired, provisioned_state(), UID_BASE)
     assert plan.actions == ()
     assert any("alice@example.com" in w for w in plan.warnings)
+    assert not any("folder" in w for w in plan.warnings)
 
 
 def test_rename_with_deactivation_disables_new_name():
@@ -211,7 +233,7 @@ def test_stale_folder_with_desired_uid_frozen_with_warning():
         accounts=(), folders=(InboxFolder("alice", 20005),), workflows=()
     )
     plan = plan_cycle(desired, actual, UID_BASE)
-    assert DeleteFolder(username="alice") not in plan.actions
+    assert not any(isinstance(a, Deprovision) for a in plan.actions)
     assert any("alice" in w and "dave" in w for w in plan.warnings)
 
 
@@ -223,7 +245,9 @@ def test_stored_uid_below_the_range_does_not_count():
         workflows=(),
     )
     plan = plan_cycle([], actual, UID_BASE)
-    assert plan.actions == (DeleteAccount(username="edge"),)
+    assert plan.actions == (
+        Deprovision(username="edge", workflow_id=None, delete_folder=False),
+    )
     assert any("below" in w for w in plan.warnings)
 
 

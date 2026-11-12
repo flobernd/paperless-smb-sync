@@ -5,9 +5,8 @@ from smb_sync.model import (
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
-    DeleteAccount,
-    DeleteFolder,
     DeleteWorkflow,
+    Deprovision,
     DisableAccount,
     EnableAccount,
     PaperlessUser,
@@ -15,6 +14,7 @@ from smb_sync.model import (
     RepairUnixAccount,
 )
 from smb_sync.mail import MailError
+from smb_sync.paperless import PaperlessError
 from smb_sync.system import CommandError
 
 
@@ -135,14 +135,12 @@ def test_folder_workflow_and_state_actions():
             DisableAccount(username="alice"),
             EnableAccount(username="alice"),
             DeleteWorkflow(workflow_id=7),
-            DeleteFolder(username="alice"),
         ]
     )
     assert failures == 0
     assert ("create_inbox_folder", "alice", 20005) in system.calls
     assert ("disable_samba_account", "alice") in system.calls
     assert ("enable_samba_account", "alice") in system.calls
-    assert ("delete_inbox_folder", "alice") in system.calls
     assert ("create_workflow", 5, "alice") in api.calls
     assert ("delete_workflow", 7) in api.calls
 
@@ -154,13 +152,42 @@ def test_repair_unix_account_recreates_unix_user_only():
     assert api.calls == []
 
 
-def test_delete_account_removes_samba_before_unix():
-    failures, system, _ = run([DeleteAccount(username="alice")])
+def test_removal_stops_at_the_first_failed_step():
+    system = FakeSystem(fail_on="delete_inbox_folder")
+    failures, system, api = run(
+        [Deprovision(username="alice", workflow_id=7, delete_folder=True)],
+        system=system,
+    )
+    assert failures == 1
+    assert system.calls == [("disable_samba_account", "alice")]
+    assert api.calls == [("delete_workflow", 7)]
+
+
+def test_removal_without_the_folder_flag_leaves_the_folder():
+    failures, system, api = run(
+        [Deprovision(username="alice", workflow_id=None, delete_folder=False)]
+    )
     assert failures == 0
     assert system.calls == [
+        ("disable_samba_account", "alice"),
         ("delete_samba_account", "alice"),
         ("delete_unix_user", "alice"),
     ]
+    assert api.calls == []
+
+
+def test_removal_closes_the_login_before_the_workflow_step():
+    api = FakeApi()
+
+    def refuse(workflow_id):
+        raise PaperlessError("HTTP 500")
+
+    api.delete_workflow = refuse
+    failures, system, _ = run(
+        [Deprovision(username="alice", workflow_id=7, delete_folder=True)], api=api
+    )
+    assert failures == 1
+    assert system.calls == [("disable_samba_account", "alice")]
 
 
 def test_rename_sequence_and_workflow_update():
@@ -204,12 +231,12 @@ def test_unexpected_exception_is_isolated_and_counted():
     failures, system, _ = run(
         [
             DisableAccount(username="alice"),
-            DeleteFolder(username="bob"),
+            CreateFolder(username="bob", uid=20006),
         ],
         system=system,
     )
     assert failures == 1
-    assert ("delete_inbox_folder", "bob") in system.calls
+    assert ("create_inbox_folder", "bob", 20006) in system.calls
 
 
 def test_unexpected_failure_logs_traceback(caplog):

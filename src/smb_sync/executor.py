@@ -8,9 +8,8 @@ from .model import (
     CreateAccount,
     CreateFolder,
     CreateWorkflow,
-    DeleteAccount,
-    DeleteFolder,
     DeleteWorkflow,
+    Deprovision,
     DisableAccount,
     EnableAccount,
     PaperlessUser,
@@ -97,13 +96,23 @@ def _apply(
         case DeleteWorkflow(workflow_id=workflow_id):
             api.delete_workflow(workflow_id)
             log.info("deleted workflow %d", workflow_id)
-        case DeleteAccount(username=username):
+        case Deprovision(
+            username=username, workflow_id=workflow_id, delete_folder=delete_folder
+        ):
+            # A failed step ends the removal. The entry goes after the folder
+            # because it proves that the daemon made the folder, and while it
+            # exists the next cycle tries the removal again. The login closes
+            # first, so a removal that stops half way leaves no open login.
+            system.disable_samba_account(username)
+            if workflow_id is not None:
+                api.delete_workflow(workflow_id)
+                log.info("deleted workflow %d", workflow_id)
+            if delete_folder:
+                system.delete_inbox_folder(username)
+                log.info("deleted inbox folder '%s' including contents", username)
             system.delete_samba_account(username)
             system.delete_unix_user(username)
             log.info("deleted samba account '%s'", username)
-        case DeleteFolder(username=username):
-            system.delete_inbox_folder(username)
-            log.info("deleted inbox folder '%s' including contents", username)
         case DisableAccount(username=username):
             system.disable_samba_account(username)
             log.info("disabled samba account '%s' (user inactive)", username)

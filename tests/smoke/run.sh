@@ -121,10 +121,11 @@ document_titled() {
     document=$(api "$API/api/documents/$1/") || return
     jq -e --arg title "$2" '.title == $title' <<<"$document" >/dev/null
 }
-note_names() {
+only_note_names() {
     local notes
     notes=$(api "$API/api/documents/$1/notes/") || return
-    jq -e --arg name "$2" 'any(.[]; .note | contains($name))' <<<"$notes" >/dev/null
+    jq -e --arg name "$2" 'length == 1 and (.[0].note | contains($name))' \
+        <<<"$notes" >/dev/null
 }
 document_gone() {
     local code
@@ -295,8 +296,9 @@ wait_for "the document of frank did not get the new password" \
 api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"username":"gina"}' >/dev/null
 wait_for "the document was not retitled for gina" \
     document_titled "$DOCUMENT_ID" '[smb-sync] credentials gina'
-# the note follows the new title in a request of its own
-wait_for "no note of the document names gina" note_names "$DOCUMENT_ID" gina
+# the title follows the note, so the note is there once the title is
+only_note_names "$DOCUMENT_ID" gina \
+    || fail "the document of gina does not have exactly one note that names gina"
 api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"groups":[]}' >/dev/null
 wait_for "the document of gina was not deleted" document_gone "$DOCUMENT_ID"
 # the empty action follows the DELETE in a request of its own

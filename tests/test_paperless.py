@@ -380,6 +380,24 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
     assert len(session.requests) == 2
 
 
+def test_a_note_goes_only_to_a_document_without_it():
+    note = "The username changed from 'dave' to 'erin'. The password is the same."
+    earlier = "The username changed from 'carol' to 'dave'. The password is the same."
+    client, session = make_client(
+        {
+            f"{BASE}/api/documents/40/notes/": FakeResponse(
+                [{"id": 1, "note": earlier}, {"id": 2, "note": note}]
+            ),
+            f"{BASE}/api/documents/41/notes/": FakeResponse([{"id": 3, "note": earlier}]),
+        }
+    )
+    client.ensure_document_note(40, note)
+    client.ensure_document_note(41, note)
+    assert session.requests == [
+        ("POST", f"{BASE}/api/documents/41/notes/", {"note": note})
+    ]
+
+
 def test_delete_document_also_empties_it_from_the_trash():
     # a document that is already in the trash answers the DELETE with 404
     session = FakeSession({}, delete_status=404)

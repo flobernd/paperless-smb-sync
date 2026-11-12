@@ -251,10 +251,16 @@ class PaperlessClient:
             files=_block_file(block),
         )
 
-    def add_document_note(self, document_id: int, note: str) -> None:
-        self._send(
-            "POST", f"/api/documents/{document_id}/notes/", json={"note": note}
-        )
+    def ensure_document_note(self, document_id: int, note: str) -> None:
+        # A retry finds the note of an earlier attempt and adds no second one.
+        # paperless answers a failed read with 200 and an error object, which
+        # fails the iteration below as an unexpected body.
+        path = f"/api/documents/{document_id}/notes/"
+        response = self._send("GET", path)
+        with _unexpected_body(f"GET {path}"):
+            present = any(n["note"] == note for n in response.json())
+        if not present:
+            self._send("POST", path, json={"note": note})
 
     def delete_credentials(
         self, username: str, user_id: int, document_ids: Sequence[int]

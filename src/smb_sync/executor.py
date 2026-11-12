@@ -152,12 +152,15 @@ def _apply(
         case RenameDocument(
             document_id=document_id, old_username=old, new_username=new
         ):
-            api.retitle_document(document_id, new)
-            api.add_document_note(
+            # The title marks the rename as done, so it goes last, and each
+            # cycle tries again until both steps are done. The note goes in
+            # only when the document lacks it, so a retry adds no second one.
+            api.ensure_document_note(
                 document_id,
                 f"The username changed from '{old}' to '{new}'. "
                 f"The password is the same.",
             )
+            api.retitle_document(document_id, new)
             log.info("retitled credentials document %d for '%s'", document_id, new)
         case RenameUser(
             old_username=old,

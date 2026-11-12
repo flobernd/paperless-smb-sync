@@ -10,6 +10,7 @@ from smb_sync.model import (
     DisableAccount,
     EnableAccount,
     PaperlessUser,
+    RenameDocument,
     RenameUser,
     RepairUnixAccount,
     UpdateWorkflow,
@@ -86,6 +87,9 @@ class FakeApi:
 
     def update_workflow(self, workflow_id, user_id, username):
         self.calls.append(("update_workflow", workflow_id, user_id, username))
+
+    def ensure_document_note(self, document_id, note):
+        self.calls.append(("ensure_document_note", document_id))
 
 
 def run(actions, system=None, api=None):
@@ -294,6 +298,21 @@ def test_rename_without_workflow_skips_api():
     )
     assert failures == 0
     assert api.calls == []
+
+
+def test_a_document_rename_adds_the_note_before_the_title():
+    api = FakeApi()
+
+    def refuse(document_id, username):
+        raise PaperlessError("HTTP 500")
+
+    api.retitle_document = refuse
+    failures, _, api = run(
+        [RenameDocument(document_id=40, old_username="alice", new_username="dave")],
+        api=api,
+    )
+    assert failures == 1
+    assert api.calls == [("ensure_document_note", 40)]
 
 
 def test_unexpected_exception_is_isolated_and_counted():

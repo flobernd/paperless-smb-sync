@@ -2,6 +2,7 @@ import http.server
 import threading
 
 import pytest
+import requests
 
 from smb_sync.model import CredentialDocument, ManagedWorkflow, PaperlessUser
 from smb_sync.paperless import PaperlessClient, PaperlessError
@@ -209,7 +210,11 @@ def test_create_workflow_payload():
 
 
 def test_a_redirected_write_fails():
-    # a real session, since the session fake cannot follow a redirect
+    # A real session, since the session fake cannot follow a redirect. It
+    # ignores the proxy variables of the environment, which would send the
+    # request to a proxy in place of the local server.
+    session = requests.Session()
+    session.trust_env = False
     seen = []
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -235,11 +240,12 @@ def test_a_redirected_write_fails():
 
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     url = f"http://127.0.0.1:{server.server_port}"
+    client = PaperlessClient(url, "token", CONSUME, session=session)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
         with pytest.raises(PaperlessError):
-            PaperlessClient(url, "token", CONSUME).create_workflow(5, "alice")
+            client.create_workflow(5, "alice")
     finally:
         server.shutdown()
         server.server_close()

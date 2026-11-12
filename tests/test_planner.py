@@ -254,13 +254,6 @@ def test_unmanaged_folder_warned_not_deleted():
     assert any("manual" in w for w in plan.warnings)
 
 
-def test_uid_mismatch_warned_not_touched():
-    desired = [PaperlessUser(6, "alice", True)]
-    plan = planned(desired, provisioned_state(username="alice", user_id=5))
-    assert plan.actions == ()
-    assert any("uid" in w.lower() for w in plan.warnings)
-
-
 def test_account_with_another_stored_uid_gets_no_action():
     # user 5 held the name alice, and a stopped removal disabled the entry
     desired = [PaperlessUser(9, "alice", True)]
@@ -273,6 +266,16 @@ def test_account_with_another_stored_uid_gets_no_action():
     assert plan.actions == ()
     (warning,) = plan.warnings
     assert "20005" in warning and "20009" in warning
+
+
+def test_inactive_user_with_another_stored_uid_has_the_login_disabled():
+    desired = [PaperlessUser(9, "alice", False)]
+    actual = state(
+        accounts=(SambaAccount("alice", 20005, True),),
+        folders=(InboxFolder("alice", 20005),),
+        unix_uids={"alice": 20005},
+    )
+    assert planned(desired, actual).actions == (DisableAccount(username="alice"),)
 
 
 def test_invalid_rename_preserves_existing_resources():

@@ -274,14 +274,19 @@ def plan_cycle(
             # The entry can be the account of a former holder of the name. A
             # chown would give the folder of that holder to the new user, an
             # enable would open the old login again, and a workflow for the new
-            # user would give that user the scans of the old login.
+            # user would give that user the scans of the old login. Closing the
+            # login gives nothing to anyone, and after a lowered UID_BASE the
+            # login is the member's own, so a deactivation still closes it.
             warnings.append(
                 f"account '{user.username}' stores uid {account.uid}, but the "
                 f"paperless user of that name maps to uid {uid}. The daemon "
-                f"changes nothing for this name. If another user had the name "
+                f"leaves the folder and the workflow of this name as they are "
+                f"and does not enable the login. If another user had the name "
                 f"before, take the user out of the sync group until the old "
                 f"account is gone, then add the user again."
             )
+            if account.enabled and not user.is_active:
+                actions.append(DisableAccount(username=user.username))
             continue
         actions.extend(_state_change(user.username, account.enabled, user.is_active))
         actions.extend(_missing_folder(user, uid, folders_by_name))

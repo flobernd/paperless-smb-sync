@@ -258,9 +258,10 @@ Samba settings, mount one or more `*.conf` files into `/etc/samba/conf.d/`:
 
 Drop-ins are appended to the generated file in filename order, after the managed share. A `[global]` header in a drop-in
 therefore re-opens the global section and its settings override the defaults, and any other section header defines an
-additional share. The container runs `testparm` over the merged file at startup and refuses to start if `testparm` fails
-or reports an unknown parameter, so a misspelled setting shows up immediately in the log instead of being ignored for
-the life of the container.
+additional share. Only a login name of the username map can log in, to such a share as well, so a Samba entry that you
+add by hand opens no share. The container runs `testparm` over the merged file at startup and refuses to start if
+`testparm` fails or reports an unknown parameter, so a misspelled setting shows up immediately in the log instead of
+being ignored for the life of the container.
 
 A drop-in that repeats the managed share's section name (`inbox`, or whatever `SHARE_NAME` is set to) merges into it
 rather than replacing it, so that is the supported way to add settings to the share itself. Do not override its
@@ -335,6 +336,10 @@ document for its own, and `regen` can then write a new password into the old doc
 the Samba volume, and remove the inbox folders of 0.1.0 from the inbox volume, which is also the consumption directory
 of paperless. The daemon leaves a folder of 0.1.0 in place with a warning, and it makes no account whose name such a
 folder has. In its first cycle the daemon removes the workflows of 0.1.0 by itself.
+
+A share of a 0.1.0 drop-in that names `@paperless` in `valid users` or `%U` in its path needs a change: the accounts are
+members of the group `smb-sync` and no longer of `paperless`, so `@paperless` admits none of them, and `%U` is now the
+login name, while an inbox folder has the account name, which is `%u`.
 
 ## Admin commands
 

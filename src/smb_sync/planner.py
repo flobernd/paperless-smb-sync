@@ -397,7 +397,8 @@ def plan_cycle(
         if entry.username not in counted_names and entry.username not in created:
             warnings.append(
                 f"samba entry '{entry.username}' is no account of smb-sync and was "
-                f"left untouched"
+                f"left untouched. The username map gives it no login name, so it "
+                f"cannot log in."
             )
 
     for folder in actual.folders:

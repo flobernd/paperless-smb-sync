@@ -173,6 +173,9 @@ def _apply(
             # need no unix account. The login closes first, so a removal that
             # stops half way leaves no open login.
             system.disable_samba_account(account)
+            # The disabled flag goes first, so a client that connects again by
+            # itself after the stop gets no new session.
+            system.stop_sessions(account)
             if workflow_id is not None:
                 api.delete_workflow(workflow_id)
                 log.info("deleted workflow %d", workflow_id)
@@ -190,6 +193,9 @@ def _apply(
             log.info("deleted samba account %s", _named(account, login_name))
         case DisableAccount(account=account):
             system.disable_samba_account(account)
+            # The disabled flag goes first, so a client that connects again by
+            # itself after the stop gets no new session.
+            system.stop_sessions(account)
             log.info("disabled samba account '%s'", account)
         case EnableAccount(account=account):
             system.enable_samba_account(account)

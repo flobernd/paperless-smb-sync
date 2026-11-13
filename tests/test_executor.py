@@ -51,6 +51,9 @@ class FakeSystem:
     def enable_samba_account(self, username):
         self._record("enable_samba_account", username)
 
+    def stop_sessions(self, account):
+        self._record("stop_sessions", account)
+
     def store_mark(self, account, uid, joined):
         self._record("store_mark", account, uid, joined)
 
@@ -146,6 +149,15 @@ def test_folder_workflow_and_state_actions():
     assert ("delete_workflow", 7) in api.calls
 
 
+def test_closing_a_login_ends_the_sessions_after_the_flag():
+    failures, system, _ = run([DisableAccount(account="u20005")])
+    assert failures == 0
+    assert system.calls == [
+        ("disable_samba_account", "u20005"),
+        ("stop_sessions", "u20005"),
+    ]
+
+
 def test_repair_unix_account_recreates_unix_user_only():
     failures, system, api = run([RepairUnixAccount(account="u20005", uid=20005)])
     assert failures == 0
@@ -169,7 +181,10 @@ def test_removal_stops_at_the_first_failed_step():
         system=system,
     )
     assert failures == 1
-    assert system.calls == [("disable_samba_account", "u20005")]
+    assert system.calls == [
+        ("disable_samba_account", "u20005"),
+        ("stop_sessions", "u20005"),
+    ]
     assert api.calls == [("delete_workflow", 7)]
 
 
@@ -189,6 +204,7 @@ def test_removal_without_the_folder_flag_leaves_the_folder():
     assert failures == 0
     assert system.calls == [
         ("disable_samba_account", "u20005"),
+        ("stop_sessions", "u20005"),
         ("delete_unix_user", "u20005"),
         ("delete_samba_account", "u20005"),
     ]
@@ -216,7 +232,10 @@ def test_removal_closes_the_login_before_the_workflow_step():
         api=api,
     )
     assert failures == 1
-    assert system.calls == [("disable_samba_account", "u20005")]
+    assert system.calls == [
+        ("disable_samba_account", "u20005"),
+        ("stop_sessions", "u20005"),
+    ]
 
 
 def test_a_failed_document_purge_keeps_the_entry():

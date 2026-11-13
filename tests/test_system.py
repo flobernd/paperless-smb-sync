@@ -1,4 +1,8 @@
+import json
+import os
 import pwd
+import signal
+import subprocess
 
 import pytest
 
@@ -186,4 +190,55 @@ def test_a_map_that_is_no_utf_8_reads_as_lines_that_differ(tmp_path):
     # the byte of an "ö" from an editor that saved the file as Latin-1
     (tmp_path / "smb-sync-usermap").write_bytes(b"!u20005 = J\xf6rg\n!nobody = *\n")
     adapter = SystemAdapter(str(tmp_path), 10000, state_dir=str(tmp_path))
-    assert adapter.read_usermap() == ("!u20005 = J�rg", "!nobody = *")
+    assert adapter.read_usermap() == ("!u20005 = J\ufffdrg", "!nobody = *")
+
+
+def session_list(*sessions):
+    # the fields that the adapter reads from `smbstatus -b --json`, with the process id as text, as Samba prints it
+    return json.dumps(
+        {
+            "sessions": {
+                str(number): {"username": account, "server_id": {"pid": str(pid)}}
+                for number, (account, pid) in enumerate(sessions)
+            }
+        }
+    )
+
+
+def test_a_session_stop_ends_the_sessions_of_that_account_only(tmp_path):
+    mine = subprocess.Popen(["sleep", "60"])
+    other = subprocess.Popen(["sleep", "60"])
+    try:
+        status = session_list(("u20005", mine.pid), ("u20006", other.pid))
+        adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
+        adapter.stop_sessions("u20005")
+        assert mine.wait(timeout=5) == -signal.SIGTERM
+        assert other.poll() is None
+    finally:
+        for process in (mine, other):
+            process.kill()
+            process.wait()
+
+
+def test_a_session_that_ended_in_the_meantime_does_not_keep_the_next_one_open(tmp_path):
+    ended = subprocess.Popen(["true"])
+    ended.wait()
+    live = subprocess.Popen(["sleep", "60"])
+    try:
+        status = session_list(("u20005", ended.pid), ("u20005", live.pid))
+        adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
+        adapter.stop_sessions("u20005")
+        assert live.wait(timeout=5) == -signal.SIGTERM
+    finally:
+        live.kill()
+        live.wait()
+
+
+def test_a_session_list_with_the_process_id_1_ends_no_process(tmp_path, monkeypatch):
+    signaled = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: signaled.append(pid))
+    status = session_list(("u20005", 4242), ("u20005", 1))
+    adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
+    with pytest.raises(CommandError, match="smbstatus"):
+        adapter.stop_sessions("u20005")
+    assert signaled == []

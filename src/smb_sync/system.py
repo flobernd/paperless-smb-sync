@@ -1,6 +1,8 @@
+import json
 import os
 import pwd
 import shutil
+import signal
 import subprocess
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
@@ -48,6 +50,15 @@ def _run(argv: list[str], input_text: str | None = None) -> str:
             f"{result.stderr.strip()}"
         )
     return result.stdout
+
+
+def _process_id(text: str) -> int:
+    pid = int(text)
+    # A signal to 0 reaches the process group of the daemon, one to -1 each
+    # process of the container, and 1 is the init of the container.
+    if pid < 2:
+        raise ValueError(f"process id {pid} is below 2")
+    return pid
 
 
 class SystemAdapter:
@@ -168,6 +179,33 @@ class SystemAdapter:
 
     def enable_samba_account(self, username: str) -> None:
         self._run(["smbpasswd", "-e", username])
+
+    def stop_sessions(self, account: str) -> None:
+        # A disabled entry keeps each session that started before. A
+        # close-share of smbcontrol leaves the session open too, so the stop
+        # ends the smbd process of each one. That process serves one client
+        # connection, so a session of another account on that connection
+        # ends with it.
+        output = self._run(["smbstatus", "-b", "--json"])
+        try:
+            pids = [
+                _process_id(session["server_id"]["pid"])
+                for session in json.loads(output)["sessions"].values()
+                if session["username"] == account
+            ]
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise CommandError(
+                f"cannot read the session list of smbstatus: {exc!r}"
+            ) from exc
+        for pid in pids:
+            with _command_error(
+                f"cannot end process {pid} of a session of '{account}'"
+            ):
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    # the session ended after the listing
+                    pass
 
     def store_mark(self, account: str, uid: int, joined: int) -> None:
         self._run(["pdbedit", "-r", "-u", account, "-N", entry_mark(uid, joined)])

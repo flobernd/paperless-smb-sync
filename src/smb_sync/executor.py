@@ -16,9 +16,11 @@ from .model import (
     HandOverDocument,
     PaperlessUser,
     RenameDocument,
-    RenameUser,
     RepairUnixAccount,
     UpdateWorkflow,
+    WriteMap,
+    account_name,
+    map_logins,
 )
 from .paperless import PaperlessClient, PaperlessError
 from .system import CommandError, SystemAdapter
@@ -36,11 +38,23 @@ def execute(
 ) -> int:
     announce = partial(_announce_credentials, api, smb_host, share_name)
     failures = 0
+    map_failed = False
+    held = 0
     for action in actions:
+        # Each of these three gives a person a login name: the block of a
+        # creation, the title of a hand-over and the note of a rename. After a
+        # failed map write the map does not carry that name yet, so they wait.
+        # Each other action runs, so a login still closes.
+        if map_failed and isinstance(
+            action, (CreateAccount, HandOverDocument, RenameDocument)
+        ):
+            held += 1
+            continue
         try:
             _apply(action, system, api, announce)
         except Exception as exc:
             failures += 1
+            map_failed = map_failed or isinstance(action, WriteMap)
             # A CommandError names its command and a PaperlessError its
             # request, so one line shows the cause. Any other error needs its
             # traceback to be found.
@@ -50,6 +64,12 @@ def execute(
                 exc,
                 exc_info=not isinstance(exc, (CommandError, PaperlessError)),
             )
+    if held:
+        log.warning(
+            "the username map was not written, so each action that names a login "
+            "waits for the next cycle (held back: %d)",
+            held,
+        )
     return failures
 
 
@@ -78,6 +98,12 @@ def _announce_credentials(
         )
 
 
+def _named(account: str, login_name: str | None) -> str:
+    if login_name is None:
+        return f"'{account}'"
+    return f"'{account}' (login name '{login_name}')"
+
+
 def _apply(
     action: Action,
     system: SystemAdapter,
@@ -85,41 +111,51 @@ def _apply(
     announce: Callable[[PaperlessUser, str, bool], None],
 ) -> None:
     match action:
+        case WriteMap(lines=lines):
+            system.write_usermap(lines)
+            log.info(
+                "wrote the username map with %d login names", len(map_logins(lines))
+            )
         case CreateAccount(user=user, uid=uid, upload=upload):
-            system.create_unix_user(user.username, uid)
+            account = account_name(uid)
+            system.create_unix_user(account, uid)
             password = generate_password()
-            system.set_samba_password(user.username, password, create=True)
+            system.set_samba_password(account, password, create=True)
             # An entry without the mark is one that the daemon does not
             # manage, so no person gets a password for it. A stop between the
             # mark and the output leaves an account with a password that
             # nobody received, and `smb-sync regen` makes a new one.
-            system.store_uid(user.username, uid)
-            log.info("provisioned samba account '%s' (uid %d)", user.username, uid)
+            system.store_mark(account, uid, user.joined)
+            log.info(
+                "provisioned samba account '%s' (uid %d) for the login name '%s'",
+                account,
+                uid,
+                user.username,
+            )
             announce(user, password, upload)
-        case RepairUnixAccount(username=username, uid=uid):
-            system.create_unix_user(username, uid)
+        case RepairUnixAccount(account=account, uid=uid):
+            system.create_unix_user(account, uid)
             log.warning(
                 "recreated missing unix account '%s' (uid %d) from passdb",
-                username,
+                account,
                 uid,
             )
-        case CreateFolder(username=username, uid=uid):
-            system.create_inbox_folder(username, uid)
-            log.info("created inbox folder '%s'", username)
-        case CreateWorkflow(user_id=user_id, username=username):
-            api.create_workflow(user_id, username)
-            log.info("created consumption workflow for '%s'", username)
-        case UpdateWorkflow(
-            workflow_id=workflow_id, user_id=user_id, username=username
-        ):
-            api.update_workflow(workflow_id, user_id, username)
-            log.info("updated consumption workflow for '%s'", username)
+        case CreateFolder(account=account, uid=uid):
+            system.create_inbox_folder(account, uid)
+            log.info("created inbox folder '%s'", account)
+        case CreateWorkflow(user_id=user_id, account=account):
+            api.create_workflow(user_id, account)
+            log.info("created consumption workflow for '%s'", account)
+        case UpdateWorkflow(workflow_id=workflow_id, user_id=user_id, account=account):
+            api.update_workflow(workflow_id, user_id, account)
+            log.info("updated consumption workflow for '%s'", account)
         case DeleteWorkflow(workflow_id=workflow_id):
             api.delete_workflow(workflow_id)
             log.info("deleted workflow %d", workflow_id)
         case Deprovision(
-            username=username,
+            account=account,
             user_id=user_id,
+            login_name=login_name,
             workflow_id=workflow_id,
             delete_folder=delete_folder,
             documents=documents,
@@ -130,25 +166,28 @@ def _apply(
             # once the unix account is gone, since smbpasswd -d and pdbedit -x
             # need no unix account. The login closes first, so a removal that
             # stops half way leaves no open login.
-            system.disable_samba_account(username)
+            system.disable_samba_account(account)
             if workflow_id is not None:
                 api.delete_workflow(workflow_id)
                 log.info("deleted workflow %d", workflow_id)
             if documents is not None:
-                api.delete_credentials(username, user_id, documents)
-                log.info("deleted the credentials documents of '%s'", username)
+                api.delete_credentials(user_id, documents)
+                log.info(
+                    "deleted the credentials documents of %s",
+                    _named(account, login_name),
+                )
             if delete_folder:
-                system.delete_inbox_folder(username)
-                log.info("deleted inbox folder '%s' including contents", username)
-            system.delete_unix_user(username)
-            system.delete_samba_account(username)
-            log.info("deleted samba account '%s'", username)
-        case DisableAccount(username=username):
-            system.disable_samba_account(username)
-            log.info("disabled samba account '%s' (user inactive)", username)
-        case EnableAccount(username=username):
-            system.enable_samba_account(username)
-            log.info("re-enabled samba account '%s'", username)
+                system.delete_inbox_folder(account)
+                log.info("deleted inbox folder '%s' including contents", account)
+            system.delete_unix_user(account)
+            system.delete_samba_account(account)
+            log.info("deleted samba account %s", _named(account, login_name))
+        case DisableAccount(account=account):
+            system.disable_samba_account(account)
+            log.info("disabled samba account '%s' (user inactive)", account)
+        case EnableAccount(account=account):
+            system.enable_samba_account(account)
+            log.info("re-enabled samba account '%s'", account)
         case DeleteDocument(document_id=document_id):
             api.delete_document(document_id)
             log.info("deleted credentials document %d", document_id)
@@ -175,26 +214,3 @@ def _apply(
             )
             api.retitle_document(document_id, new)
             log.info("retitled credentials document %d for '%s'", document_id, new)
-        case RenameUser(
-            old_username=old,
-            new_username=new,
-            uid=uid,
-            user_id=user_id,
-            workflow_id=workflow_id,
-        ):
-            # The check comes before anything moves, so a refused rename
-            # leaves the folder under the old name together with the login.
-            # The folder moves first. Once the entry has the new name, the
-            # planner sees no open rename and gives the user a new empty folder
-            # beside the old one.
-            system.check_samba_rename(old, new)
-            system.rename_inbox_folder(old, new)
-            system.rename_samba_account(old, new, uid)
-            if workflow_id is not None:
-                api.update_workflow(workflow_id, user_id, new)
-            log.warning(
-                "renamed '%s' to '%s'. Update the scanner profile folder path "
-                "manually.",
-                old,
-                new,
-            )

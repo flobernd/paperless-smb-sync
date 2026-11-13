@@ -64,16 +64,16 @@ def _join_date(raw: str) -> int:
     return (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
 
 
-def _workflow_payload(user_id: int, username: str, consume_path: str) -> dict[str, Any]:
+def _workflow_payload(user_id: int, account: str, consume_path: str) -> dict[str, Any]:
     return {
-        "name": f"{WORKFLOW_PREFIX}{username}",
+        "name": f"{WORKFLOW_PREFIX}{account}",
         "order": 0,
         "enabled": True,
         "triggers": [
             {
                 "type": _TRIGGER_CONSUMPTION,
                 "sources": [_SOURCE_CONSUME_FOLDER],
-                "filter_path": workflow_filter(consume_path, username),
+                "filter_path": workflow_filter(consume_path, account),
             }
         ],
         "actions": [
@@ -132,15 +132,15 @@ def _credential_document(record: dict[str, Any]) -> CredentialDocument | None:
     )
 
 
-def _of_user(document: CredentialDocument, username: str, user_id: int) -> bool:
-    # The name counts only for a document without an owner: paperless clears
-    # the owner when the user is deleted, and the title is then all that links
-    # the document to the account. A title can carry an earlier name of the
-    # user, or a name that another user has now.
+def _of_user(document: CredentialDocument, user_id: int) -> bool:
+    # Each document without an owner goes. paperless clears the owner when it
+    # deletes the user, and a removal that starts again has no id and no name
+    # for that document. The daemon keeps no credentials document without an
+    # owner.
     return (
         document.owner_id == user_id
         or document.recipient_id == user_id
-        or (document.owner_id is None and document.username == username)
+        or document.owner_id is None
     )
 
 
@@ -258,22 +258,22 @@ class PaperlessClient:
             ]
         return managed
 
-    def create_workflow(self, user_id: int, username: str) -> None:
+    def create_workflow(self, user_id: int, account: str) -> None:
         self._send(
             "POST",
             "/api/workflows/",
-            json=_workflow_payload(user_id, username, self._consume_path),
+            json=_workflow_payload(user_id, account, self._consume_path),
         )
 
     def delete_workflow(self, workflow_id: int) -> None:
         # a workflow already removed by hand is converged, not an error
         self._send("DELETE", f"/api/workflows/{workflow_id}/", tolerate=(404,))
 
-    def update_workflow(self, workflow_id: int, user_id: int, username: str) -> None:
+    def update_workflow(self, workflow_id: int, user_id: int, account: str) -> None:
         self._send(
             "PUT",
             f"/api/workflows/{workflow_id}/",
-            json=_workflow_payload(user_id, username, self._consume_path),
+            json=_workflow_payload(user_id, account, self._consume_path),
         )
 
     def add_credentials_version(self, document_id: int, block: str) -> None:
@@ -305,9 +305,7 @@ class PaperlessClient:
                 f"paperless did not save the note on document {document_id}"
             )
 
-    def delete_credentials(
-        self, username: str, user_id: int, document_ids: Sequence[int]
-    ) -> None:
+    def delete_credentials(self, user_id: int, document_ids: Sequence[int]) -> None:
         for document_id in document_ids:
             self._trash_document(document_id)
         # the listing also finds what a removal that stopped after its DELETE
@@ -322,7 +320,7 @@ class PaperlessClient:
         trashed = [
             i
             for i, d in documents
-            if i in removed or (d is not None and _of_user(d, username, user_id))
+            if i in removed or (d is not None and _of_user(d, user_id))
         ]
         self._empty_trash(trashed)
 

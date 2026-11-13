@@ -11,11 +11,12 @@ from smb_sync.model import (
     Deprovision,
     DisableAccount,
     EnableAccount,
+    HandOverDocument,
     PaperlessUser,
     RenameDocument,
-    RenameUser,
     RepairUnixAccount,
     UpdateWorkflow,
+    WriteMap,
 )
 from smb_sync.paperless import PaperlessError
 from smb_sync.system import CommandError
@@ -50,23 +51,17 @@ class FakeSystem:
     def enable_samba_account(self, username):
         self._record("enable_samba_account", username)
 
-    def check_samba_rename(self, old, new):
-        self._record("check_samba_rename", old, new)
+    def store_mark(self, account, uid, joined):
+        self._record("store_mark", account, uid, joined)
 
-    def rename_samba_account(self, old, new, uid):
-        self._record("rename_samba_account", old, new, uid)
-
-    def store_uid(self, username, uid):
-        self._record("store_uid", username, uid)
+    def write_usermap(self, lines):
+        self._record("write_usermap", lines)
 
     def create_inbox_folder(self, username, uid):
         self._record("create_inbox_folder", username, uid)
 
     def delete_inbox_folder(self, username):
         self._record("delete_inbox_folder", username)
-
-    def rename_inbox_folder(self, old, new):
-        self._record("rename_inbox_folder", old, new)
 
 
 class FakeApi:
@@ -115,21 +110,21 @@ def test_create_account_sets_password_and_prints_once(capsys):
     user = member(5, "alice")
     failures, system, _ = run([CreateAccount(user=user, uid=20005, upload=False)])
     assert failures == 0
-    assert system.calls[0] == ("create_unix_user", "alice", 20005)
+    assert system.calls[0] == ("create_unix_user", "u20005", 20005)
     name, username, password, create = system.calls[1]
-    assert (name, username, create) == ("set_samba_password", "alice", True)
+    assert (name, username, create) == ("set_samba_password", "u20005", True)
     out = capsys.readouterr().out
     assert "SMB credentials for 'alice'" in out
     assert password in out
     assert "\\\\nas.lan\\inbox" in out
-    assert system.calls[-1] == ("store_uid", "alice", 20005)
+    assert system.calls[-1] == ("store_mark", "u20005", 20005, 1731405600123)
 
 
-def test_a_creation_whose_uid_write_fails_hands_out_no_password(capsys):
+def test_a_creation_whose_mark_write_fails_hands_out_no_password(capsys):
     user = member(5, "alice")
     failures, system, api = run(
         [CreateAccount(user=user, uid=20005, upload=True)],
-        system=FakeSystem(fail_on="store_uid"),
+        system=FakeSystem(fail_on="store_mark"),
     )
     assert failures == 1
     _, _, password, _ = system.calls[1]
@@ -140,27 +135,27 @@ def test_a_creation_whose_uid_write_fails_hands_out_no_password(capsys):
 def test_folder_workflow_and_state_actions():
     failures, system, api = run(
         [
-            CreateFolder(username="alice", uid=20005),
-            CreateWorkflow(user_id=5, username="alice"),
-            UpdateWorkflow(workflow_id=7, user_id=5, username="alice"),
-            DisableAccount(username="alice"),
-            EnableAccount(username="alice"),
+            CreateFolder(account="u20005", uid=20005),
+            CreateWorkflow(user_id=5, account="u20005"),
+            UpdateWorkflow(workflow_id=7, user_id=5, account="u20005"),
+            DisableAccount(account="u20005"),
+            EnableAccount(account="u20005"),
             DeleteWorkflow(workflow_id=7),
         ]
     )
     assert failures == 0
-    assert ("create_inbox_folder", "alice", 20005) in system.calls
-    assert ("disable_samba_account", "alice") in system.calls
-    assert ("enable_samba_account", "alice") in system.calls
-    assert ("create_workflow", 5, "alice") in api.calls
-    assert ("update_workflow", 7, 5, "alice") in api.calls
+    assert ("create_inbox_folder", "u20005", 20005) in system.calls
+    assert ("disable_samba_account", "u20005") in system.calls
+    assert ("enable_samba_account", "u20005") in system.calls
+    assert ("create_workflow", 5, "u20005") in api.calls
+    assert ("update_workflow", 7, 5, "u20005") in api.calls
     assert ("delete_workflow", 7) in api.calls
 
 
 def test_repair_unix_account_recreates_unix_user_only():
-    failures, system, api = run([RepairUnixAccount(username="alice", uid=20005)])
+    failures, system, api = run([RepairUnixAccount(account="u20005", uid=20005)])
     assert failures == 0
-    assert system.calls == [("create_unix_user", "alice", 20005)]
+    assert system.calls == [("create_unix_user", "u20005", 20005)]
     assert api.calls == []
 
 
@@ -169,8 +164,9 @@ def test_removal_stops_at_the_first_failed_step():
     failures, system, api = run(
         [
             Deprovision(
-                username="alice",
+                account="u20005",
                 user_id=5,
+                login_name="alice",
                 workflow_id=7,
                 delete_folder=True,
                 documents=None,
@@ -179,7 +175,7 @@ def test_removal_stops_at_the_first_failed_step():
         system=system,
     )
     assert failures == 1
-    assert system.calls == [("disable_samba_account", "alice")]
+    assert system.calls == [("disable_samba_account", "u20005")]
     assert api.calls == [("delete_workflow", 7)]
 
 
@@ -187,8 +183,9 @@ def test_removal_without_the_folder_flag_leaves_the_folder():
     failures, system, api = run(
         [
             Deprovision(
-                username="alice",
+                account="u20005",
                 user_id=5,
+                login_name="alice",
                 workflow_id=None,
                 delete_folder=False,
                 documents=None,
@@ -197,9 +194,9 @@ def test_removal_without_the_folder_flag_leaves_the_folder():
     )
     assert failures == 0
     assert system.calls == [
-        ("disable_samba_account", "alice"),
-        ("delete_unix_user", "alice"),
-        ("delete_samba_account", "alice"),
+        ("disable_samba_account", "u20005"),
+        ("delete_unix_user", "u20005"),
+        ("delete_samba_account", "u20005"),
     ]
     assert api.calls == []
 
@@ -214,8 +211,9 @@ def test_removal_closes_the_login_before_the_workflow_step():
     failures, system, _ = run(
         [
             Deprovision(
-                username="alice",
+                account="u20005",
                 user_id=5,
+                login_name="alice",
                 workflow_id=7,
                 delete_folder=True,
                 documents=None,
@@ -224,22 +222,23 @@ def test_removal_closes_the_login_before_the_workflow_step():
         api=api,
     )
     assert failures == 1
-    assert system.calls == [("disable_samba_account", "alice")]
+    assert system.calls == [("disable_samba_account", "u20005")]
 
 
 def test_a_failed_document_purge_keeps_the_entry():
     # while the entry exists, the next cycle tries the removal again
     api = FakeApi()
 
-    def refuse(username, user_id, document_ids):
+    def refuse(user_id, document_ids):
         raise PaperlessError("HTTP 500")
 
     api.delete_credentials = refuse
     failures, system, _ = run(
         [
             Deprovision(
-                username="alice",
+                account="u20005",
                 user_id=5,
+                login_name="alice",
                 workflow_id=None,
                 delete_folder=True,
                 documents=(40,),
@@ -248,61 +247,23 @@ def test_a_failed_document_purge_keeps_the_entry():
         api=api,
     )
     assert failures == 1
-    assert ("delete_samba_account", "alice") not in system.calls
+    assert ("delete_samba_account", "u20005") not in system.calls
 
 
-def test_rename_sequence_and_workflow_update():
+def test_a_failed_map_write_holds_back_each_action_that_names_a_login():
     failures, system, api = run(
         [
-            RenameUser(
-                old_username="alice",
-                new_username="dave",
-                uid=20005,
-                user_id=5,
-                workflow_id=7,
-            )
-        ]
-    )
-    assert failures == 0
-    assert system.calls == [
-        ("check_samba_rename", "alice", "dave"),
-        ("rename_inbox_folder", "alice", "dave"),
-        ("rename_samba_account", "alice", "dave", 20005),
-    ]
-    assert api.calls == [("update_workflow", 7, 5, "dave")]
-
-
-def test_a_refused_rename_moves_no_folder():
-    failures, system, api = run(
-        [
-            RenameUser(
-                old_username="alice",
-                new_username="dave",
-                uid=20005,
-                user_id=5,
-                workflow_id=7,
-            )
+            WriteMap(("!u20005 = alice", "!nobody = *")),
+            DisableAccount(account="u20006"),
+            CreateAccount(user=member(5, "alice"), uid=20005, upload=True),
+            HandOverDocument(document_id=40, user_id=7, username="carol"),
+            RenameDocument(document_id=41, old_username="dave", new_username="erin"),
         ],
-        system=FakeSystem(fail_on="check_samba_rename"),
+        system=FakeSystem(fail_on="write_usermap"),
     )
     assert failures == 1
-    assert system.calls == []
-    assert api.calls == []
-
-
-def test_rename_without_workflow_skips_api():
-    failures, _, api = run(
-        [
-            RenameUser(
-                old_username="alice",
-                new_username="dave",
-                uid=20005,
-                user_id=5,
-                workflow_id=None,
-            )
-        ]
-    )
-    assert failures == 0
+    assert ("disable_samba_account", "u20006") in system.calls
+    assert "create_unix_user" not in [call[0] for call in system.calls]
     assert api.calls == []
 
 
@@ -325,19 +286,19 @@ def test_unexpected_exception_is_isolated_and_counted():
     system = FakeSystem(fail_on="disable_samba_account", fail_with=RuntimeError)
     failures, system, _ = run(
         [
-            DisableAccount(username="alice"),
-            CreateFolder(username="bob", uid=20006),
+            DisableAccount(account="u20005"),
+            CreateFolder(account="u20006", uid=20006),
         ],
         system=system,
     )
     assert failures == 1
-    assert ("create_inbox_folder", "bob", 20006) in system.calls
+    assert ("create_inbox_folder", "u20006", 20006) in system.calls
 
 
 def test_unexpected_failure_logs_traceback(caplog):
     system = FakeSystem(fail_on="disable_samba_account", fail_with=RuntimeError)
     with caplog.at_level(logging.ERROR):
-        run([DisableAccount(username="alice")], system=system)
+        run([DisableAccount(account="u20005")], system=system)
     assert any(record.exc_info for record in caplog.records)
 
 
@@ -345,7 +306,7 @@ def test_unexpected_failure_logs_traceback(caplog):
 def test_a_failed_command_or_request_logs_one_line_without_a_traceback(error, caplog):
     system = FakeSystem(fail_on="disable_samba_account", fail_with=error)
     with caplog.at_level(logging.ERROR):
-        failures, _, _ = run([DisableAccount(username="alice")], system=system)
+        failures, _, _ = run([DisableAccount(account="u20005")], system=system)
     assert failures == 1
     (record,) = caplog.records
     assert not record.exc_info
@@ -359,7 +320,7 @@ def test_a_failed_upload_does_not_fail_the_creation(caplog):
             api=FakeApi(fail_upload=True),
         )
     assert failures == 0
-    assert system.calls[-1] == ("store_uid", "alice", 20005)
+    assert system.calls[-1] == ("store_mark", "u20005", 20005, 1731405600123)
     assert "upload refused" in caplog.text
 
 

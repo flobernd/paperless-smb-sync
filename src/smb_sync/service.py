@@ -2,7 +2,8 @@ import fcntl
 import logging
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from .config import Config
@@ -68,6 +69,7 @@ def observe(
         folders=tuple(system.list_inbox_folders()),
         workflows=tuple(workflows),
         unix_uids=system.list_unix_uids(),
+        map_lines=system.read_usermap() or (),
         documents=documents,
         token_user=token_user,
     )
@@ -104,6 +106,15 @@ def run_cycle(
     return failures == 0
 
 
+@contextmanager
+def cycle_lock(lock_path: str) -> Generator[None, None, None]:
+    # Serializes the daemon loop, `smb-sync sync` and `smb-sync regen`. Each of
+    # them reads the accounts and the map and then acts on what it read.
+    with open(lock_path, "w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def run_cycle_locked(
     cfg: Config,
     api: PaperlessClient,
@@ -111,9 +122,7 @@ def run_cycle_locked(
     lock_path: str = DEFAULT_LOCK_PATH,
     repeat: WarningRepeat | None = None,
 ) -> bool:
-    # serializes the daemon loop against docker-exec'd `smb-sync sync`
-    with open(lock_path, "w", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with cycle_lock(lock_path):
         return run_cycle(cfg, api, system, repeat=repeat)
 
 
@@ -165,14 +174,13 @@ def run_daemon(
 def restore_unix_accounts(system: SystemAdapter, uid_base: int) -> int:
     failures = 0
     for account in counted_accounts(system.list_samba_accounts(), uid_base):
-        # a rename that stopped before its last step leaves two entries with
-        # one uid, and useradd refuses the second, so one failure must not
-        # lock out the entries after it
+        # smbd refuses the login of an entry without a unix account, so one
+        # entry that fails must not lock out the entries after it
         try:
-            system.create_unix_user(account.username, account.uid)
+            system.create_unix_user(account.name, account.uid)
         except CommandError as exc:
             log.error(
-                "could not restore the unix account of '%s': %s", account.username, exc
+                "could not restore the unix account of '%s': %s", account.name, exc
             )
             failures += 1
     return failures

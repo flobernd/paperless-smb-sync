@@ -422,7 +422,7 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
             )
         }
     )
-    client.delete_credentials("alice", 5, [40])
+    client.delete_credentials(5, [40])
     assert session.requests == [
         ("DELETE", f"{BASE}/api/documents/40/", None),
         (
@@ -431,8 +431,11 @@ def test_only_the_trashed_credentials_of_that_user_are_emptied():
             {"action": "empty", "documents": [40, 41, 44, 45]},
         ),
     ]
-    client.delete_credentials("carol", 7, [])
-    assert len(session.requests) == 2
+    # a removal that starts again has no id and no name for the document of a deleted user
+    client.delete_credentials(7, [])
+    assert session.requests[2:] == [
+        ("POST", f"{BASE}/api/trash/", {"action": "empty", "documents": [45]}),
+    ]
 
 
 def test_a_note_goes_only_to_a_document_without_it():

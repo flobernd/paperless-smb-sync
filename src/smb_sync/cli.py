@@ -5,17 +5,26 @@ import time
 
 from .config import Config, load_config
 from .credentials import credentials_block, generate_password
-from .model import ActualState, Deprovision, PaperlessUser, Plan, RenameUser
+from .model import (
+    ActualState,
+    Deprovision,
+    PaperlessUser,
+    Plan,
+    account_name,
+    login_key,
+    map_logins,
+)
 from .paperless import PaperlessClient, PaperlessError
 from .planner import (
     NO_SUPERUSER_WARNING,
     counted_accounts,
-    counted_uid,
     plan_cycle,
     user_documents,
 )
 from .service import (
     DEFAULT_HEARTBEAT_PATH,
+    DEFAULT_LOCK_PATH,
+    cycle_lock,
     heartbeat_is_fresh,
     observe,
     restore_unix_accounts,
@@ -37,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     regen = sub.add_parser(
         "regen", help="set a new password for a user and print it once"
     )
-    regen.add_argument("username")
+    regen.add_argument("login_name")
     sub.add_parser(
         "restore", help="make the unix accounts of the managed samba entries"
     )
@@ -50,49 +59,42 @@ def build_parser() -> argparse.ArgumentParser:
 def format_status(
     users: list[PaperlessUser], actual: ActualState, plan: Plan, uid_base: int
 ) -> str:
-    desired = [u for u in users if u.member]
-    # the planner ignores an entry that does not count, so its user reads as
-    # missing
-    accounts = {a.username: a for a in counted_accounts(actual.accounts, uid_base)}
+    members = {uid_base + u.id: u for u in users if u.member}
+    entries = {a.uid: a for a in counted_accounts(actual.accounts, uid_base)}
+    # the plan drops the line of an account that it removes, so the name of
+    # such an account comes from the map as the cycle read it
+    read_logins = map_logins(actual.map_lines)
     folders = {f.name for f in actual.folders}
     workflows = {w.name for w in actual.workflows}
-    desired_names = {u.username for u in desired}
-    renamed_to = {
-        a.old_username: a.new_username
-        for a in plan.actions
-        if isinstance(a, RenameUser)
-    }
-    removals = {a.username for a in plan.actions if isinstance(a, Deprovision)}
+    removals = {a.account for a in plan.actions if isinstance(a, Deprovision)}
 
-    def status_row(username: str, uid: int | None, samba: str) -> tuple[str, ...]:
-        return (
-            username,
-            "-" if uid is None else str(uid),
-            samba,
-            "yes" if username in folders else "no",
-            "yes" if username in workflows else "no",
+    rows: list[tuple[str, ...]] = [
+        ("LOGIN NAME", "ACCOUNT", "UID", "LOGIN", "FOLDER", "WORKFLOW")
+    ]
+    for uid in sorted(members.keys() | entries.keys()):
+        account = account_name(uid)
+        member = members.get(uid)
+        entry = entries.get(uid)
+        if account in removals:
+            login = "pending removal"
+        elif entry is None:
+            login = "missing"
+        elif account not in plan.logins:
+            login = "no login name"
+        elif entry.enabled:
+            login = "open"
+        else:
+            login = "closed"
+        rows.append(
+            (
+                read_logins.get(account, "-") if member is None else member.username,
+                account,
+                str(uid),
+                login,
+                "yes" if account in folders else "no",
+                "yes" if account in workflows else "no",
+            )
         )
-
-    rows: list[tuple[str, ...]] = [("USERNAME", "UID", "SAMBA", "FOLDER", "WORKFLOW")]
-    for user in sorted(desired, key=lambda u: u.username):
-        account = accounts.get(user.username)
-        if account is None:
-            samba = "missing"
-        elif account.enabled:
-            samba = "enabled"
-        else:
-            samba = "disabled"
-        rows.append(status_row(user.username, uid_base + user.id, samba))
-    for account in sorted(actual.accounts, key=lambda a: a.username):
-        if account.username in desired_names:
-            continue
-        if account.username in renamed_to:
-            samba = f"renaming to {renamed_to[account.username]}"
-        elif account.username in removals:
-            samba = "pending removal"
-        else:
-            samba = "left untouched"
-        rows.append(status_row(account.username, account.uid, samba))
 
     widths = [max(map(len, column)) for column in zip(*rows)]
     lines = [
@@ -140,36 +142,43 @@ def _update_document(
 def regen_password(
     cfg: Config,
     system: SystemAdapter,
-    username: str,
+    login_name: str,
     api: PaperlessClient,
+    lock_path: str,
 ) -> int:
-    account = next(
-        (a for a in system.list_samba_accounts() if a.username == username),
-        None,
-    )
-    if account is not None and account.uid is None:
-        print(
-            f"samba entry '{username}' stores no uid of the managed range, so "
-            f"smb-sync does not manage it. If '{username}' is a member of the "
-            f"sync group, the next cycle or 'smb-sync sync' makes the account "
-            f"again and prints new credentials.",
-            file=sys.stderr,
+    # A cycle can remove or close the account between two steps, so the lock
+    # is held from the map read to the document.
+    with cycle_lock(lock_path):
+        typed = login_key(login_name)
+        line = next(
+            (
+                (account, login)
+                for account, login in map_logins(system.read_usermap() or ()).items()
+                if login_key(login) == typed
+            ),
+            None,
         )
-        return 1
-    stored_uid = None if account is None else counted_uid(account, cfg.uid_base)
-    if account is None or stored_uid is None:
-        print(f"no managed samba account '{username}'", file=sys.stderr)
-        return 1
-    password = generate_password()
-    system.set_samba_password(username, password, create=False)
-    if not account.enabled:
-        # smbpasswd clears the disabled flag of an entry when it sets the
-        # password, which would open the login of an inactive user
-        system.disable_samba_account(username)
-    print(credentials_block(cfg.smb_host, cfg.share_name, username, password))
-    if cfg.credentials_document:
-        _update_document(cfg, api, username, stored_uid - cfg.uid_base, password)
-    return 0
+        entries = counted_accounts(system.list_samba_accounts(), cfg.uid_base)
+        entry = None
+        if line is not None:
+            entry = next((e for e in entries if e.name == line[0]), None)
+        if line is None or entry is None:
+            print(
+                f"no managed account for the login name '{login_name}'",
+                file=sys.stderr,
+            )
+            return 1
+        account, login = line
+        password = generate_password()
+        system.set_samba_password(account, password, create=False)
+        if not entry.enabled:
+            # smbpasswd clears the disabled flag of an entry when it sets the
+            # password, which would open the login of an inactive user
+            system.disable_samba_account(account)
+        print(credentials_block(cfg.smb_host, cfg.share_name, login, password))
+        if cfg.credentials_document:
+            _update_document(cfg, api, login, entry.uid - cfg.uid_base, password)
+        return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -216,4 +225,4 @@ def main(argv: list[str] | None = None) -> int:
         plan = plan_cycle(users, actual, cfg.uid_base)
         print(format_status(users, actual, plan, cfg.uid_base))
         return 0
-    return regen_password(cfg, system, args.username, api)
+    return regen_password(cfg, system, args.login_name, api, DEFAULT_LOCK_PATH)

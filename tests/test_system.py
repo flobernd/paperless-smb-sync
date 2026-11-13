@@ -7,23 +7,19 @@ from smb_sync.system import CommandError, SystemAdapter
 
 PDBEDIT_VERBOSE = """\
 ---------------
-Unix username:        alice
+Unix username:        u20005
 Account Flags:        [U          ]
 User SID:             S-1-5-21-1-2-3-1000
-Account desc:         smb-sync uid=20005
+Account desc:         smb-sync uid=20005 joined=1731405600123
 Logon time:           Wed, 11 Nov 2026 22:00:00 UTC
 ---------------
-Unix username:        bob
+Unix username:        u20006
 Account Flags:        [DU         ]
 Account desc:
 ---------------
 Unix username:        desk
 Account Flags:        [U          ]
 Account desc:         Front desk scanner: do not delete
----------------
-Unix username:        scanner
-Account Flags:        [U          ]
-Account desc:         smb-sync uid=20007 old scanner
 """
 
 
@@ -32,17 +28,11 @@ class FakeRun:
         self.calls = []
         self.outputs = outputs or {}
         self.fail_prefix = fail_prefix
-        self.import_file_content = None
 
     def __call__(self, argv, input_text=None):
         self.calls.append((tuple(argv), input_text))
         if self.fail_prefix and tuple(argv[: len(self.fail_prefix)]) == self.fail_prefix:
             raise CommandError(f"{' '.join(argv)} failed")
-        if argv[:2] == ["pdbedit", "-i"]:
-            # capture the temp file before the adapter deletes it
-            path = argv[2].removeprefix("smbpasswd:")
-            with open(path, encoding="utf-8") as fh:
-                self.import_file_content = fh.read()
         return self.outputs.get(tuple(argv), "")
 
 
@@ -51,28 +41,12 @@ def make_adapter(tmp_path, outputs=None, fail_prefix=None):
     return SystemAdapter(str(tmp_path), 10000, run=run), run
 
 
-def no_such_user(monkeypatch):
-    monkeypatch.setattr(
-        pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name))
-    )
-
-
-def unix_users(monkeypatch, **uids):
-    def getpwnam(name):
-        if name not in uids:
-            raise KeyError(name)
-        return pwd.struct_passwd((name, "x", uids[name], 10000, "", "/", "/bin/false"))
-
-    monkeypatch.setattr(pwd, "getpwnam", getpwnam)
-
-
-def test_listing_reads_the_stored_uid_of_each_entry(tmp_path):
+def test_listing_reads_the_description_and_the_flag_of_each_entry(tmp_path):
     adapter, _ = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     assert adapter.list_samba_accounts() == [
-        SambaAccount("alice", 20005, True),
-        SambaAccount("bob", None, False),
-        SambaAccount("desk", None, True),
-        SambaAccount("scanner", None, True),
+        SambaAccount("u20005", "smb-sync uid=20005 joined=1731405600123", True),
+        SambaAccount("u20006", "", False),
+        SambaAccount("desk", "Front desk scanner: do not delete", True),
     ]
 
 
@@ -166,129 +140,6 @@ def test_disable_and_enable_send_their_own_flag(tmp_path):
     ]
 
 
-def test_rename_samba_account_exports_imports_then_deletes(tmp_path, monkeypatch):
-    unix_users(monkeypatch, alice=20005)
-    line = "alice:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): line})
-    adapter.rename_samba_account("alice", "dave", 20005)
-    assert run.import_file_content == "dave:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    # the unix rename must run between the export and the import: pdbedit
-    # resolves the passdb uid via getpwnam, so it has to see the old name
-    # for the export and the new name for the import
-    assert [c[0][:2] for c in run.calls] == [
-        ("pdbedit", "-L"),
-        ("usermod", "--login"),
-        ("pdbedit", "-i"),
-        ("pdbedit", "-r"),
-        ("pdbedit", "-x"),
-    ]
-    assert run.calls[1][0] == ("usermod", "--login", "dave", "alice")
-    assert run.calls[4][0] == ("pdbedit", "-x", "-u", "alice")
-
-
-def test_rename_samba_account_skips_usermod_when_new_unix_exists(
-    tmp_path, monkeypatch
-):
-    entry = pwd.struct_passwd(("dave", "x", 20005, 10000, "", "/", "/bin/false"))
-    monkeypatch.setattr(pwd, "getpwnam", lambda name: entry)
-    line = "alice:4294967295:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): line})
-    adapter.rename_samba_account("alice", "dave", 20005)
-    assert all(call[0][0] != "usermod" for call in run.calls)
-    assert run.import_file_content == "dave:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    assert run.calls[-1][0] == ("pdbedit", "-x", "-u", "alice")
-
-
-def test_rename_refuses_a_new_entry_without_the_old_one(tmp_path, monkeypatch):
-    unix_users(monkeypatch, dave=20005)
-    line = "dave:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): line})
-    with pytest.raises(CommandError, match="not found"):
-        adapter.rename_samba_account("alice", "dave", 20005)
-    assert [c[0] for c in run.calls] == [("pdbedit", "-L", "-w")]
-
-
-def test_rename_refuses_a_new_entry_with_another_password(tmp_path, monkeypatch):
-    unix_users(monkeypatch, alice=20005)
-    lines = (
-        "alice:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-        "dave:4294967295:AAAA:CCCC:[U          ]:LCT-68C3A123:\n"
-    )
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): lines})
-    with pytest.raises(CommandError, match="not its copy"):
-        adapter.rename_samba_account("alice", "dave", 20005)
-    assert [c[0] for c in run.calls] == [("pdbedit", "-L", "-w")]
-
-
-def test_rename_resumes_with_a_copy_whose_flags_differ(tmp_path, monkeypatch):
-    # the old entry was disabled after the import made the copy
-    unix_users(monkeypatch, alice=20005)
-    lines = (
-        "alice:20005:AAAA:BBBB:[DU         ]:LCT-68C3A123:\n"
-        "dave:4294967295:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    )
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): lines})
-    adapter.rename_samba_account("alice", "dave", 20005)
-    assert [c[0] for c in run.calls] == [
-        ("pdbedit", "-L", "-w"),
-        ("usermod", "--login", "dave", "alice"),
-        ("pdbedit", "-r", "-u", "dave", "-N", "smb-sync uid=20005"),
-        ("pdbedit", "-x", "-u", "alice"),
-    ]
-
-
-def test_rename_makes_the_unix_account_when_neither_name_has_one(
-    tmp_path, monkeypatch
-):
-    unix_users(monkeypatch)
-    line = "alice:4294967295:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-w"): line})
-    adapter.rename_samba_account("alice", "dave", 20005)
-    commands = [c[0][0] for c in run.calls]
-    assert "usermod" not in commands
-    useradd = next(c[0] for c in run.calls if c[0][0] == "useradd")
-    assert useradd[-1] == "dave"
-    assert "20005" in useradd
-
-
-def test_rename_samba_account_import_failure_keeps_old_entry(
-    tmp_path, monkeypatch
-):
-    no_such_user(monkeypatch)
-    line = "alice:20005:AAAA:BBBB:[U          ]:LCT-68C3A123:\n"
-    adapter, run = make_adapter(
-        tmp_path,
-        {("pdbedit", "-L", "-w"): line},
-        fail_prefix=("pdbedit", "-i"),
-    )
-    with pytest.raises(CommandError):
-        adapter.rename_samba_account("alice", "dave", 20005)
-    # the old entry must never be deleted before the import succeeded
-    assert all(call[0][:2] != ("pdbedit", "-x") for call in run.calls)
-
-
-def test_rename_inbox_folder(tmp_path):
-    (tmp_path / "alice").mkdir()
-    adapter, _ = make_adapter(tmp_path)
-    adapter.rename_inbox_folder("alice", "dave")
-    assert not (tmp_path / "alice").exists()
-    assert (tmp_path / "dave").is_dir()
-
-
-def test_rename_inbox_folder_missing_old_is_noop(tmp_path):
-    adapter, _ = make_adapter(tmp_path)
-    adapter.rename_inbox_folder("alice", "dave")
-    assert not (tmp_path / "dave").exists()
-
-
-def test_rename_inbox_folder_conflict_raises(tmp_path):
-    (tmp_path / "alice").mkdir()
-    (tmp_path / "dave").mkdir()
-    adapter, _ = make_adapter(tmp_path)
-    with pytest.raises(CommandError, match="already exists"):
-        adapter.rename_inbox_folder("alice", "dave")
-
-
 def test_delete_inbox_folder_removes_contents(tmp_path):
     (tmp_path / "alice").mkdir()
     (tmp_path / "alice" / "scan.pdf").write_text("data")
@@ -308,12 +159,6 @@ def test_list_inbox_folders_missing_root_raises(tmp_path):
         adapter.list_inbox_folders()
 
 
-def test_rename_samba_account_missing_raises(tmp_path):
-    adapter, _ = make_adapter(tmp_path)
-    with pytest.raises(CommandError, match="not found"):
-        adapter.rename_samba_account("ghost", "dave", 20005)
-
-
 def test_delete_samba_account_missing_is_noop(tmp_path):
     adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
     adapter.delete_samba_account("ghost")
@@ -322,5 +167,23 @@ def test_delete_samba_account_missing_is_noop(tmp_path):
 
 def test_delete_samba_account_present_runs_pdbedit(tmp_path):
     adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
-    adapter.delete_samba_account("alice")
-    assert run.calls[-1] == (("pdbedit", "-x", "-u", "alice"), None)
+    adapter.delete_samba_account("u20005")
+    assert run.calls[-1] == (("pdbedit", "-x", "-u", "u20005"), None)
+
+
+def test_a_map_write_moves_a_new_file_over_the_old_one(tmp_path):
+    adapter = SystemAdapter(str(tmp_path), 10000, state_dir=str(tmp_path))
+    assert adapter.read_usermap() is None
+    adapter.write_usermap(("!nobody = *",))
+    first = (tmp_path / "smb-sync-usermap").stat().st_ino
+    adapter.write_usermap(("!u20005 = alice", "!nobody = *"))
+    assert (tmp_path / "smb-sync-usermap").stat().st_ino != first
+    assert adapter.read_usermap() == ("!u20005 = alice", "!nobody = *")
+    assert [path.name for path in tmp_path.iterdir()] == ["smb-sync-usermap"]
+
+
+def test_a_map_that_is_no_utf_8_reads_as_lines_that_differ(tmp_path):
+    # the byte of an "ö" from an editor that saved the file as Latin-1
+    (tmp_path / "smb-sync-usermap").write_bytes(b"!u20005 = J\xf6rg\n!nobody = *\n")
+    adapter = SystemAdapter(str(tmp_path), 10000, state_dir=str(tmp_path))
+    assert adapter.read_usermap() == ("!u20005 = J�rg", "!nobody = *")

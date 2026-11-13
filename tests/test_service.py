@@ -83,6 +83,12 @@ class FakeSystem:
     def list_unix_uids(self):
         return {}
 
+    def read_usermap(self):
+        return None
+
+    def write_usermap(self, lines):
+        self.calls.append(("write_usermap", lines))
+
     def create_unix_user(self, username, uid):
         if username == self.fail_user:
             raise CommandError(f"uid {uid} is taken")
@@ -91,8 +97,8 @@ class FakeSystem:
     def set_samba_password(self, username, password, create=False):
         self.calls.append(("set_samba_password", username))
 
-    def store_uid(self, username, uid):
-        self.calls.append(("store_uid", username, uid))
+    def store_mark(self, account, uid, joined):
+        self.calls.append(("store_mark", account, uid, joined))
 
     def create_inbox_folder(self, username, uid):
         self.calls.append(("create_inbox_folder", username))
@@ -116,9 +122,8 @@ def test_happy_path_provisions(capsys):
     api = FakeApi(users=[member(5, "alice")])
     system = FakeSystem()
     assert run_cycle(CFG, api, system) is True
-    assert ("create_unix_user", "alice", 20005) in system.calls
-    assert ("create_inbox_folder", "alice") in system.calls
-    assert api.created == ["alice"]
+    assert ("create_unix_user", "u20005", 20005) in system.calls
+    assert api.created == ["u20005"]
 
 
 def test_run_cycle_locked_uses_lock_file(tmp_path, capsys):
@@ -254,7 +259,7 @@ def test_a_failed_document_read_does_not_stop_the_cycle(api_class, caplog):
     )
     with caplog.at_level(logging.ERROR):
         assert run_cycle(DOCUMENT_CFG, api, FakeSystem()) is True
-    assert api.created == ["alice"]
+    assert api.created == ["u20005"]
     assert api.uploaded == []
     assert "documents down" in caplog.text
 
@@ -262,22 +267,25 @@ def test_a_failed_document_read_does_not_stop_the_cycle(api_class, caplog):
 def test_restore_makes_unix_accounts_for_counted_entries_only():
     system = FakeSystem(
         accounts=[
-            SambaAccount("alice", 20005, True),
-            SambaAccount("desk", None, True),
-            SambaAccount("low", 19999, True),
+            SambaAccount("u20005", "smb-sync uid=20005 joined=1731405600123", True),
+            SambaAccount("desk", "", True),
+            SambaAccount("u19999", "smb-sync uid=19999 joined=1731405600123", True),
         ]
     )
     assert restore_unix_accounts(system, 20000) == 0
-    assert system.calls == [("create_unix_user", "alice", 20005)]
+    assert system.calls == [("create_unix_user", "u20005", 20005)]
 
 
 def test_restore_continues_after_one_entry_fails():
     system = FakeSystem(
-        accounts=[SambaAccount("alice", 20005, True), SambaAccount("bob", 20006, True)],
-        fail_user="alice",
+        accounts=[
+            SambaAccount("u20005", "smb-sync uid=20005 joined=1731405600123", True),
+            SambaAccount("u20006", "smb-sync uid=20006 joined=1731405600123", True),
+        ],
+        fail_user="u20005",
     )
     assert restore_unix_accounts(system, 20000) == 1
-    assert ("create_unix_user", "bob", 20006) in system.calls
+    assert ("create_unix_user", "u20006", 20006) in system.calls
 
 
 def test_daemon_drops_the_heartbeat_of_an_earlier_run(monkeypatch, tmp_path):

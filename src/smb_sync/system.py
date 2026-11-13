@@ -1,22 +1,23 @@
 import os
 import pwd
-import re
 import shutil
 import subprocess
-import tempfile
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
-from .model import InboxFolder, SambaAccount
+from .model import InboxFolder, SambaAccount, entry_mark
 
 # The entrypoint, the share template, the smoke test and the volume mounts of
 # the two compose files use the same path, so they change together with this
 # constant.
 INBOX_ROOT = "/shares/inbox"
 
-_UID_MARK = "smb-sync uid="
-_STORED_UID = re.compile(re.escape(_UID_MARK) + r"([0-9]+)")
+# The volume that holds passdb, so the map survives a recreation of the
+# container together with the entries that its lines name.
+STATE_DIR = "/var/lib/samba"
+
+_USERMAP = "smb-sync-usermap"
 
 
 class CommandError(Exception):
@@ -38,32 +39,6 @@ def _unix_user(username: str) -> pwd.struct_passwd | None:
         return None
 
 
-def _stored_uid(description: str) -> int | None:
-    match = _STORED_UID.fullmatch(description)
-    return int(match.group(1)) if match else None
-
-
-def _hashes(line: str) -> list[str]:
-    # the LM and the NT hash field of a line of pdbedit -L -w
-    return line.split(":")[2:4]
-
-
-def _check_rename(lines: dict[str, str], old: str, new: str) -> None:
-    # Without the old entry nothing proves that an entry with the new name is
-    # its copy. An entry of another origin has a password that someone else
-    # knows, and the rename would give that password the folder of the user.
-    # The flags are not compared, since the old entry of an inactive user is
-    # disabled ahead of a rename that resumes.
-    if old not in lines:
-        raise CommandError(f"samba account '{old}' not found")
-    if new in lines and _hashes(lines[new]) != _hashes(lines[old]):
-        raise CommandError(
-            f"cannot rename samba account '{old}' to '{new}': an entry '{new}' "
-            f"exists that is not its copy. Remove that entry or give the user "
-            f"another name."
-        )
-
-
 def _run(argv: list[str], input_text: str | None = None) -> str:
     with _command_error(f"cannot run {argv[0]}"):
         result = subprocess.run(argv, input=input_text, capture_output=True, text=True)
@@ -81,16 +56,18 @@ class SystemAdapter:
         inbox_path: str,
         paperless_gid: int,
         run: Callable[..., str] | None = None,
+        state_dir: str = STATE_DIR,
     ):
         self._inbox = Path(inbox_path)
         self._gid = paperless_gid
         self._run = run or _run
+        self._usermap = Path(state_dir) / _USERMAP
 
     # -- observation -------------------------------------------------
 
     def list_samba_accounts(self) -> list[SambaAccount]:
-        # pdbedit takes the uid of an entry from its unix account, which a
-        # recreated container lacks, so the entry keeps its uid in the
+        # The unix account of an entry is gone after a recreation of the
+        # container, so the entry carries the mark of the daemon in its
         # description field. A share user cannot change that field.
         output = self._run(["pdbedit", "-L", "-v"])
         entries: list[dict[str, str]] = []
@@ -105,7 +82,7 @@ class SystemAdapter:
         return [
             SambaAccount(
                 username=entry["Unix username"],
-                uid=_stored_uid(entry.get("Account desc", "")),
+                description=entry.get("Account desc", ""),
                 enabled="D" not in entry.get("Account Flags", ""),
             )
             for entry in entries
@@ -125,6 +102,19 @@ class SystemAdapter:
                 if entry.is_dir(follow_symlinks=False)
             ]
         return folders
+
+    def read_usermap(self) -> tuple[str, ...] | None:
+        # A map that a person saved in another encoding, or that a fault
+        # damaged, would otherwise stop each cycle at the observation, so no
+        # login would close and the map would never be written again. With
+        # each such byte replaced, the lines differ from the wanted ones and
+        # the cycle writes the map again.
+        with _command_error(f"cannot read the username map '{self._usermap}'"):
+            try:
+                with open(self._usermap, encoding="utf-8", errors="replace") as fh:
+                    return tuple(line.removesuffix("\n") for line in fh)
+            except FileNotFoundError:
+                return None
 
     # -- unix accounts -----------------------------------------------
 
@@ -170,8 +160,7 @@ class SystemAdapter:
         # idempotent so a retried deprovision after a partial failure succeeds
         if all(a.username != username for a in self.list_samba_accounts()):
             return
-        # smbpasswd -x fails for an entry without a unix account, such as the
-        # old name of a rename that stopped before its last step
+        # smbpasswd -x fails for an entry without a unix account
         self._run(["pdbedit", "-x", "-u", username])
 
     def disable_samba_account(self, username: str) -> None:
@@ -180,57 +169,20 @@ class SystemAdapter:
     def enable_samba_account(self, username: str) -> None:
         self._run(["smbpasswd", "-e", username])
 
-    def store_uid(self, username: str, uid: int) -> None:
-        self._run(["pdbedit", "-r", "-u", username, "-N", f"{_UID_MARK}{uid}"])
+    def store_mark(self, account: str, uid: int, joined: int) -> None:
+        self._run(["pdbedit", "-r", "-u", account, "-N", entry_mark(uid, joined)])
 
-    def _hash_lines(self) -> dict[str, str]:
-        # the full listing, because one call shows both names of a rename
-        output = self._run(["pdbedit", "-L", "-w"])
-        return {
-            line.split(":", 1)[0]: line
-            for line in output.splitlines()
-            if ":" in line
-        }
+    # -- username map ------------------------------------------------
 
-    def check_samba_rename(self, old: str, new: str) -> None:
-        _check_rename(self._hash_lines(), old, new)
-
-    def rename_samba_account(self, old: str, new: str, uid: int) -> None:
-        # tdbsam cannot rename in place, so the hash line is re-imported
-        # under the new name. Each step either checks whether an earlier call
-        # did it or can safely run again, so the next cycle finishes a rename
-        # that stopped anywhere.
-        # The unix account comes first because pdbedit imports a line only
-        # for a name that getpwnam resolves. It moves when the old name still
-        # holds it, since useradd refuses a second account with its uid.
-        # The old entry goes last: until the new entry stores the uid, the old
-        # one is how the planner finds the open rename, and without it the
-        # next cycle creates the account again with a new password.
-        lines = self._hash_lines()
-        # the same check as check_samba_rename, so that a call of this method
-        # alone cannot take over an entry of another origin
-        _check_rename(lines, old, new)
-        if _unix_user(new) is None:
-            if _unix_user(old) is not None:
-                self._run(["usermod", "--login", new, old])
-            else:
-                self.create_unix_user(new, uid)
-        if new not in lines:
-            parts = lines[old].split(":")
-            parts[0] = new
-            parts[1] = str(uid)  # exported uid is unreliable once getpwnam(old) fails
-            with tempfile.NamedTemporaryFile(
-                "w", encoding="utf-8", suffix=".smbpasswd"
-            ) as fh:
-                fh.write(":".join(parts) + "\n")
-                # pdbedit opens the file by name while this handle is still open
-                fh.flush()
-                self._run(["pdbedit", "-i", f"smbpasswd:{fh.name}"])
-        # The smbpasswd format has no description field, so the import loses
-        # the uid. store_uid fails when pdbedit -i refused the line with exit 0,
-        # so the old entry stays.
-        self.store_uid(new, uid)
-        self._run(["pdbedit", "-x", "-u", old])
+    def write_usermap(self, lines: Sequence[str]) -> None:
+        # smbd reads the map at each login. A login during a write into the
+        # map itself sees a file without its last line, and without that line
+        # an account name is a login name. So the lines go into a new file
+        # that replaces the map in one step.
+        fresh = self._usermap.with_name(f"{self._usermap.name}.new")
+        with _command_error(f"cannot write the username map '{self._usermap}'"):
+            fresh.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+            os.replace(fresh, self._usermap)
 
     # -- inbox folders -----------------------------------------------
 
@@ -247,17 +199,3 @@ class SystemAdapter:
             return
         with _command_error(f"cannot delete inbox folder '{path}'"):
             shutil.rmtree(path)
-
-    def rename_inbox_folder(self, old: str, new: str) -> None:
-        old_path = self._inbox / old
-        new_path = self._inbox / new
-        if not old_path.exists():
-            return
-        if new_path.exists():
-            raise CommandError(
-                f"cannot rename inbox folder '{old}': '{new}' already exists"
-            )
-        with _command_error(
-            f"cannot rename inbox folder '{old_path}' to '{new_path}'"
-        ):
-            old_path.rename(new_path)

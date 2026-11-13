@@ -1,5 +1,9 @@
+import fcntl
 import logging
+import re
 from dataclasses import replace
+
+import pytest
 
 from smb_sync.cli import format_status, main, regen_password
 from smb_sync.config import Config
@@ -30,100 +34,134 @@ CFG = Config(
 )
 
 
+JOINED = 1731405600123
+ALICE = ("!u20005 = alice", "!nobody = *")
+
+
+def member(user_id, username, active=True):
+    return PaperlessUser(user_id, username, active, JOINED, True)
+
+
+def entry(user_id, enabled=True):
+    uid = 20000 + user_id
+    return SambaAccount(f"u{uid}", f"smb-sync uid={uid} joined={JOINED}", enabled)
+
+
 class FakeSystem:
-    def __init__(self, accounts):
+    def __init__(self, accounts, lines=None):
         self.accounts = accounts
+        self.lines = lines
         self.calls = []
 
     def list_samba_accounts(self):
         return self.accounts
 
-    def set_samba_password(self, username, password, create=False):
-        self.calls.append((username, password, create))
+    def read_usermap(self):
+        return self.lines
 
-    def disable_samba_account(self, username):
-        self.calls.append(("disable_samba_account", username))
+    def set_samba_password(self, account, password, create=False):
+        self.calls.append((account, password, create))
 
-
-def member(user_id, username, active=True):
-    return PaperlessUser(user_id, username, active, 1731405600123, True)
-
-
-def test_format_status_table():
-    desired = [member(5, "alice"), member(6, "bob", active=False)]
-    actual = ActualState(
-        accounts=(SambaAccount("alice", 20005, True),),
-        folders=(InboxFolder("alice", 20005),),
-        workflows=(ManagedWorkflow(7, "alice", 5),),
-        unix_uids={},
-        documents=(),
-        token_user=None,
-    )
-    plan = plan_cycle(desired, actual, 20000)
-    output = format_status(desired, actual, plan, 20000)
-    lines = output.splitlines()
-    assert "USERNAME" in lines[0]
-    alice_line = next(line for line in lines if line.startswith("alice"))
-    assert "enabled" in alice_line
-    assert "yes" in alice_line
-    bob_line = next(line for line in lines if line.startswith("bob"))
-    assert "missing" in bob_line
+    def disable_samba_account(self, account):
+        self.calls.append(("disable_samba_account", account))
 
 
-def test_status_labels_follow_the_plan():
-    desired = [
-        member(5, "dave"),
-        member(6, "Bad Name"),
+def regen(system, login_name, api, tmp_path, cfg=CFG):
+    return regen_password(cfg, system, login_name, api, str(tmp_path / "lock"))
+
+
+def test_status_rows_follow_the_plan():
+    users = [
+        # a paperless user outside the sync group, who has no row
+        PaperlessUser(4, "zed", True, JOINED, False),
+        member(5, "alice"),
+        member(6, "a&b"),
         member(7, "carol"),
+        member(8, "dave", active=False),
     ]
     actual = ActualState(
-        accounts=(
-            SambaAccount("alice", 20005, True),
-            SambaAccount("bob", 20006, True),
-            SambaAccount("carol", None, True),
-            SambaAccount("gone", 20009, True),
-        ),
-        folders=(),
-        workflows=(),
-        unix_uids={"alice": 20005, "bob": 20006, "gone": 20009},
+        accounts=(entry(5), entry(6), entry(8, enabled=False), entry(9)),
+        folders=(InboxFolder("u20005", 20005),),
+        workflows=(ManagedWorkflow(105, "u20005", 5),),
+        unix_uids={},
+        map_lines=("!u20005 = alice", "!u20009 = erin", "!nobody = *"),
         documents=(),
         token_user=None,
     )
-    plan = plan_cycle(desired, actual, 20000)
-    text = format_status(desired, actual, plan, 20000)
-    rows = {line.split()[0]: line for line in text.splitlines() if line.strip()}
-    assert "renaming to dave" in rows["alice"]
-    assert "left untouched" in rows["bob"]
-    assert "pending removal" in rows["gone"]
-    assert "missing" in rows["carol"]
+    plan = plan_cycle(users, actual, 20000)
+    table = format_status(users, actual, plan, 20000).splitlines()[1:6]
+    assert [re.split(r" {2,}", row) for row in table] == [
+        ["alice", "u20005", "20005", "open", "yes", "yes"],
+        ["a&b", "u20006", "20006", "no login name", "no", "no"],
+        ["carol", "u20007", "20007", "missing", "no", "no"],
+        ["dave", "u20008", "20008", "closed", "no", "no"],
+        ["erin", "u20009", "20009", "pending removal", "no", "no"],
+    ]
 
 
-def test_regen_password_refuses_unmanaged_account(capsys):
-    system = FakeSystem(accounts=[SambaAccount("legacy", 1000, True)])
-    assert regen_password(CFG, system, "legacy", object()) == 1
-    assert "no managed samba account" in capsys.readouterr().err
-    assert system.calls == []
-
-
-def test_regen_password_sets_and_prints(capsys):
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    assert regen_password(CFG, system, "alice", object()) == 0
-    username, password, create = system.calls[0]
-    assert (username, create) == ("alice", False)
+def test_regen_finds_the_account_through_the_map_without_case(tmp_path, capsys):
+    system = FakeSystem(
+        [entry(5), entry(9)], ("!u20005 = John.Doe", "!u20009 = anna", "!nobody = *")
+    )
+    assert regen(system, "john.doe", object(), tmp_path) == 0
+    ((account, password, create),) = system.calls
+    assert (account, create) == ("u20005", False)
     out = capsys.readouterr().out
-    assert "SMB credentials for 'alice'" in out
+    assert "SMB credentials for 'John.Doe'" in out
     assert password in out
 
 
-def test_regen_keeps_a_disabled_login_closed():
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, False)])
-    assert regen_password(CFG, system, "alice", object()) == 0
+@pytest.mark.parametrize(
+    ("typed", "accounts"),
+    [
+        # the account name is no login name
+        ("u20005", [entry(5)]),
+        # the line of the map names an entry that the daemon does not manage
+        ("ghost", [entry(5), SambaAccount("u20007", "", True)]),
+    ],
+)
+def test_regen_refuses_a_name_without_a_managed_account(typed, accounts, tmp_path, capsys):
+    system = FakeSystem(accounts, ("!u20005 = alice", "!u20007 = ghost", "!nobody = *"))
+    assert regen(system, typed, object(), tmp_path) == 1
+    assert typed in capsys.readouterr().err
+    assert system.calls == []
+
+
+def test_regen_holds_the_cycle_lock_from_the_map_read_to_the_document(tmp_path):
+    seen = []
+
+    def probe():
+        # a second open file description cannot take a held flock
+        with open(tmp_path / "lock", "a", encoding="utf-8") as other:
+            try:
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen.append("free")
+            except BlockingIOError:
+                seen.append("held")
+
+    class ProbingSystem(FakeSystem):
+        def read_usermap(self):
+            probe()
+            return self.lines
+
+    class ProbingApi(FakeDocumentApi):
+        def upload_credentials(self, user_id, username, block):
+            probe()
+
+    system = ProbingSystem([entry(5)], ALICE)
+    assert regen(system, "alice", ProbingApi([]), tmp_path, cfg=DOCUMENT_CFG) == 0
+    assert seen == ["held", "held"]
+
+
+def test_regen_keeps_a_disabled_login_closed(tmp_path):
+    system = FakeSystem([entry(5, enabled=False)], ALICE)
+    assert regen(system, "alice", object(), tmp_path) == 0
     (username, _, create), disable = system.calls
-    assert (username, create) == ("alice", False)
-    assert disable == ("disable_samba_account", "alice")
+    assert (username, create) == ("u20005", False)
+    assert disable == ("disable_samba_account", "u20005")
     # an open login stays open
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
-    assert regen_password(CFG, system, "alice", object()) == 0
+    system = FakeSystem([entry(5)], ALICE)
+    assert regen(system, "alice", object(), tmp_path) == 0
     assert len(system.calls) == 1
 
 
@@ -143,7 +181,7 @@ def test_main_sync_maps_cycle_result_to_exit_code(monkeypatch):
     assert main(["sync"]) == 1
 
 
-def test_main_regen_unknown_account(monkeypatch, capsys):
+def test_main_regen_unknown_account(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
     monkeypatch.setattr(
         "smb_sync.cli.PaperlessClient", lambda url, token, consume: object()
@@ -151,8 +189,9 @@ def test_main_regen_unknown_account(monkeypatch, capsys):
     monkeypatch.setattr(
         "smb_sync.cli.SystemAdapter", lambda root, gid: FakeSystem(accounts=[])
     )
+    monkeypatch.setattr("smb_sync.cli.DEFAULT_LOCK_PATH", str(tmp_path / "lock"))
     assert main(["regen", "ghost"]) == 1
-    assert "no managed samba account" in capsys.readouterr().err
+    assert "ghost" in capsys.readouterr().err
 
 
 def test_main_status_reports_an_api_failure_in_one_line(monkeypatch, capsys):
@@ -199,15 +238,15 @@ class FakeDocumentApi:
 DOCUMENT_CFG = replace(CFG, credentials_document=True)
 
 
-def test_regen_adds_a_version_to_the_document_of_the_user(capsys):
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+def test_regen_adds_a_version_to_the_document_of_the_user(tmp_path, capsys):
+    system = FakeSystem([entry(5)], ALICE)
     api = FakeDocumentApi(
         [
             CredentialDocument(41, "alice", 9, recipient_id=None),
             CredentialDocument(40, "alice", 5, recipient_id=None),
         ]
     )
-    assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
+    assert regen(system, "alice", api, tmp_path, cfg=DOCUMENT_CFG) == 0
     (document_id, block), = api.versions
     assert document_id == 40
     assert system.calls[0][1] in block
@@ -215,42 +254,42 @@ def test_regen_adds_a_version_to_the_document_of_the_user(capsys):
     assert api.uploaded == []
 
 
-def test_regen_uploads_a_document_when_none_is_left(capsys):
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+def test_regen_uploads_a_document_when_none_is_left(tmp_path, capsys):
+    system = FakeSystem([entry(5)], ALICE)
     api = FakeDocumentApi([])
-    assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
+    assert regen(system, "alice", api, tmp_path, cfg=DOCUMENT_CFG) == 0
     assert api.uploaded == [(5, "alice")]
 
 
-def test_regen_of_the_token_user_leaves_the_uploads_for_other_users(capsys):
-    system = FakeSystem(accounts=[SambaAccount("admin", 20001, True)])
+def test_regen_of_the_token_user_leaves_the_uploads_for_other_users(tmp_path, capsys):
+    system = FakeSystem([entry(1)], ("!u20001 = admin", "!nobody = *"))
     api = FakeDocumentApi(
         [
             CredentialDocument(41, "bob", 1, recipient_id=6),
             CredentialDocument(40, "admin", 1, recipient_id=None),
         ]
     )
-    assert regen_password(DOCUMENT_CFG, system, "admin", api) == 0
+    assert regen(system, "admin", api, tmp_path, cfg=DOCUMENT_CFG) == 0
     (document_id, _), = api.versions
     assert document_id == 40
 
 
-def test_regen_resets_the_rights_of_the_document_before_it_writes(capsys):
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+def test_regen_resets_the_rights_of_the_document_before_it_writes(tmp_path, capsys):
+    system = FakeSystem([entry(5)], ALICE)
     api = FakeDocumentApi([CredentialDocument(40, "alice", 5, recipient_id=None)])
-    assert regen_password(DOCUMENT_CFG, system, "alice", api) == 0
+    assert regen(system, "alice", api, tmp_path, cfg=DOCUMENT_CFG) == 0
     assert [call[:2] for call in api.calls] == [
         ("hand_over_document", 40),
         ("add_credentials_version", 40),
     ]
 
 
-def test_regen_survives_an_api_failure_at_the_document_update(caplog):
+def test_regen_survives_an_api_failure_at_the_document_update(tmp_path, caplog):
     class DownApi:
         def token_user(self):
             raise PaperlessError("api down")
 
-    system = FakeSystem(accounts=[SambaAccount("alice", 20005, True)])
+    system = FakeSystem([entry(5)], ALICE)
     with caplog.at_level(logging.ERROR):
-        assert regen_password(DOCUMENT_CFG, system, "alice", DownApi()) == 0
+        assert regen(system, "alice", DownApi(), tmp_path, cfg=DOCUMENT_CFG) == 0
     assert "api down" in caplog.text

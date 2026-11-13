@@ -2,6 +2,7 @@ import re
 from collections.abc import Container, Iterable, Mapping, Sequence
 
 from .model import (
+    MAP_LAST_LINE,
     Action,
     ActualState,
     CreateAccount,
@@ -20,11 +21,15 @@ from .model import (
     PaperlessUser,
     Plan,
     RenameDocument,
-    RenameUser,
     RepairUnixAccount,
     SambaAccount,
     TokenUser,
     UpdateWorkflow,
+    WriteMap,
+    account_name,
+    map_line,
+    map_logins,
+    parse_mark,
 )
 
 NO_SUPERUSER_WARNING = (
@@ -32,79 +37,76 @@ NO_SUPERUSER_WARNING = (
     "credentials document is made"
 )
 
-# useradd-compatible names alone. A user with another name is skipped with a
-# warning.
+# useradd-compatible names alone. A member with another name gets no line in
+# the map and a warning.
 _VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
-
-
-def counted_uid(account: SambaAccount, uid_base: int) -> int | None:
-    # a creation stores the uid right after the password, so an entry without
-    # one is either unfinished or not the daemon's
-    if account.uid is not None and account.uid >= uid_base:
-        return account.uid
-    return None
 
 
 def counted_accounts(
     accounts: Iterable[SambaAccount], uid_base: int
 ) -> tuple[ManagedAccount, ...]:
-    return tuple(
-        ManagedAccount(username=a.username, uid=uid, enabled=a.enabled)
-        for a in accounts
-        if (uid := counted_uid(a, uid_base)) is not None
-    )
+    # A creation stores the mark right after the password, so an entry without
+    # one is either unfinished or not the daemon's. The daemon names each
+    # account after its uid, so an entry that carries a mark under another name
+    # is not one that it made.
+    counted: list[ManagedAccount] = []
+    for account in accounts:
+        mark = parse_mark(account.description)
+        if mark is None:
+            continue
+        uid, joined = mark
+        if uid >= uid_base and account.username == account_name(uid):
+            counted.append(
+                ManagedAccount(
+                    name=account.username,
+                    uid=uid,
+                    joined=joined,
+                    enabled=account.enabled,
+                )
+            )
+    return tuple(sorted(counted, key=lambda a: a.uid))
 
 
-def _state_change(username: str, enabled: bool, active: bool) -> list[Action]:
-    if enabled and not active:
-        return [DisableAccount(username=username)]
-    if not enabled and active:
-        return [EnableAccount(username=username)]
-    return []
-
-
-def _skipped_state_change(
-    user: PaperlessUser, uid: int, counted: Iterable[ManagedAccount]
+def _workflow_action(
+    user: PaperlessUser, account: str, workflows: Mapping[str, ManagedWorkflow]
 ) -> list[Action]:
-    # A user that the planner skips can still hold a login under an earlier
-    # name, and a deactivation has to close it. A rename that stopped leaves
-    # the old and the new entry with the uid, and a restore gives the unix
-    # account to the entry listed first, so each of them changes.
-    return [
-        action
-        for holder in counted
-        if holder.uid == uid
-        for action in _state_change(holder.username, holder.enabled, user.is_active)
-    ]
-
-
-def _missing_folder(
-    user: PaperlessUser, uid: int, folders_by_name: Mapping[str, InboxFolder]
-) -> list[Action]:
-    # an existing folder is adopted rather than recreated. Correcting its owner
-    # uid also takes over a folder of that name that exists under another uid.
-    folder = folders_by_name.get(user.username)
-    if folder is None or folder.uid != uid:
-        return [CreateFolder(username=user.username, uid=uid)]
-    return []
-
-
-def _missing_workflow(
-    user: PaperlessUser,
-    workflows_by_username: Mapping[str, ManagedWorkflow],
-) -> list[Action]:
-    workflow = workflows_by_username.get(user.username)
+    workflow = workflows.get(account)
     if workflow is None:
-        return [CreateWorkflow(user_id=user.id, username=user.username)]
+        return [CreateWorkflow(user_id=user.id, account=account)]
     # a workflow that is the full definition for another user gives that user
     # the scans of this one
     if workflow.defined_for != user.id:
         return [
-            UpdateWorkflow(
-                workflow_id=workflow.id, user_id=user.id, username=user.username
-            )
+            UpdateWorkflow(workflow_id=workflow.id, user_id=user.id, account=account)
         ]
     return []
+
+
+def _member_actions(
+    user: PaperlessUser,
+    account: ManagedAccount,
+    unix_uids: Container[str],
+    folders: Mapping[str, InboxFolder],
+    workflows: Mapping[str, ManagedWorkflow],
+) -> list[Action]:
+    actions: list[Action] = []
+    if account.name not in unix_uids:
+        # passdb survived a recreation of the container but the unix
+        # account of this entry did not. smbd needs that account to map the
+        # NT hash.
+        # create_unix_user is idempotent, so this is safe to re-emit.
+        actions.append(RepairUnixAccount(account=account.name, uid=account.uid))
+    if account.enabled and not user.is_active:
+        actions.append(DisableAccount(account=account.name))
+    # an existing folder is adopted rather than recreated. Correcting its owner
+    # uid also takes over a folder of that name that exists under another uid.
+    folder = folders.get(account.name)
+    if folder is None or folder.uid != account.uid:
+        actions.append(CreateFolder(account=account.name, uid=account.uid))
+    actions.extend(_workflow_action(user, account.name, workflows))
+    if not account.enabled and user.is_active:
+        actions.append(EnableAccount(account=account.name))
+    return actions
 
 
 def user_documents(
@@ -121,32 +123,30 @@ def user_documents(
 
 
 def _removal_documents(
-    account: ManagedAccount,
-    uid_base: int,
-    desired_uids: Container[int],
+    user_id: int,
+    login_name: str | None,
     documents: Sequence[CredentialDocument],
     token_user: TokenUser | None,
 ) -> tuple[int, ...] | None:
-    # the old name of a rename has the uid of a desired user, who keeps the
-    # documents
-    if token_user is None or account.uid in desired_uids:
+    if token_user is None:
         return None
-    owned = {
-        d.id for d in user_documents(documents, account.uid - uid_base, token_user)
-    }
+    owned = {d.id for d in user_documents(documents, user_id, token_user)}
+    # paperless clears the owner of a document when it deletes the user, and
+    # the login name in the title is then all that links the document to the
+    # account
     return tuple(
         d.id
         for d in documents
-        if d.id in owned or (d.owner_id is None and d.username == account.username)
+        if d.id in owned or (d.owner_id is None and d.username == login_name)
     )
 
 
 def _document_action(
     document: CredentialDocument,
     token_user: TokenUser,
-    users_by_id: Mapping[int, PaperlessUser],
-    desired_ids: Container[int],
-    stored_uids: Container[int],
+    users_with_line: Mapping[int, PaperlessUser],
+    member_ids: Container[int],
+    entry_uids: Container[int],
     uid_base: int,
 ) -> Action | None:
     if document.owner_id is None:
@@ -155,7 +155,7 @@ def _document_action(
     if document.recipient_id is not None and document.owner_id == token_user.id:
         # the id decides, since another user can have taken the name that the
         # upload was made for
-        user = users_by_id.get(document.recipient_id)
+        user = users_with_line.get(document.recipient_id)
         if user is not None:
             # The title keeps the name that the text of the upload shows. When
             # the user has another name by now, the next cycle sees a title
@@ -166,16 +166,16 @@ def _document_action(
                 user_id=user.id,
                 username=document.username,
             )
-        # while an entry stores the uid, the removal of that account takes the
-        # document
+        # the removal of a counted entry with the uid of the recipient takes
+        # the document
         if (
-            document.recipient_id not in desired_ids
-            and uid_base + document.recipient_id not in stored_uids
+            document.recipient_id not in member_ids
+            and uid_base + document.recipient_id not in entry_uids
         ):
             return DeleteDocument(document_id=document.id)
         return None
     if document.recipient_id is None:
-        owner = users_by_id.get(document.owner_id)
+        owner = users_with_line.get(document.owner_id)
         if owner is not None and owner.username != document.username:
             return RenameDocument(
                 document_id=document.id,
@@ -190,210 +190,126 @@ def plan_cycle(
     actual: ActualState,
     uid_base: int,
 ) -> Plan:
-    desired = [u for u in users if u.member]
     actions: list[Action] = []
     warnings: list[str] = []
 
+    members = {uid_base + u.id: u for u in users if u.member}
     counted = counted_accounts(actual.accounts, uid_base)
-    accounts_by_name = {a.username: a for a in counted}
-    accounts_by_uid = {a.uid: a for a in counted}
-
-    valid: list[PaperlessUser] = []
-    # uids of skipped users still protect their resources: a rename to an
-    # invalid name must not tear down what the old name provisioned
-    invalid_uids: set[int] = set()
-    for user in desired:
-        if _VALID_USERNAME.match(user.username):
-            valid.append(user)
-        else:
-            invalid_uids.add(uid_base + user.id)
-            warnings.append(
-                f"user '{user.username}' is not a valid unix account name and "
-                f"was skipped. Rename the user in paperless to provision it."
-            )
-            actions.extend(_skipped_state_change(user, uid_base + user.id, counted))
-
-    folders_by_name = {f.name: f for f in actual.folders}
-    workflows_by_username = {w.name: w for w in actual.workflows}
-    desired_names = {u.username for u in valid}
+    counted_names = {a.name for a in counted}
+    entry_uids = {a.uid for a in counted}
+    folders = {f.name: f for f in actual.folders}
+    workflows = {w.name: w for w in actual.workflows}
 
     delivery = actual.token_user
     if delivery is not None and not delivery.is_superuser:
         delivery = None
 
-    renamed_from: set[str] = set()
-
-    for user in valid:
-        uid = uid_base + user.id
-        account = accounts_by_name.get(user.username)
-
-        if account is None:
-            # a unix account with the user's own uid is what a creation that
-            # stopped early leaves behind
-            taken_uid = actual.unix_uids.get(user.username)
-            if taken_uid is not None and taken_uid != uid:
-                invalid_uids.add(uid)
-                warnings.append(
-                    f"user '{user.username}' has the name of another unix account "
-                    f"(uid {taken_uid}) and was skipped. Rename the user in "
-                    f"paperless to provision it."
-                )
-                actions.extend(_skipped_state_change(user, uid, counted))
-                continue
-            holder = accounts_by_uid.get(uid)
-            if holder is not None and holder.username not in desired_names:
-                # same uid under another name means the paperless user was
-                # renamed, so the rename keeps the data and the password.
-                # The state change of the old name does not depend on the
-                # rename, so a deactivation closes the login when the rename
-                # fails. The one of the new name sets the state of a copy that
-                # an earlier rename made before it stopped and before the
-                # state changed.
-                actions.extend(
-                    _state_change(holder.username, holder.enabled, user.is_active)
-                )
-                workflow = workflows_by_username.get(holder.username)
-                actions.append(
-                    RenameUser(
-                        old_username=holder.username,
-                        new_username=user.username,
-                        uid=uid,
-                        user_id=user.id,
-                        workflow_id=workflow.id if workflow else None,
-                    )
-                )
-                renamed_from.add(holder.username)
-                actions.extend(
-                    _state_change(user.username, holder.enabled, user.is_active)
-                )
-                continue
-            actions.append(
-                CreateAccount(user=user, uid=uid, upload=delivery is not None)
-            )
-            actions.extend(_missing_folder(user, uid, folders_by_name))
-            actions.extend(_missing_workflow(user, workflows_by_username))
-            # smbpasswd -a creates the account enabled
-            actions.extend(_state_change(user.username, True, user.is_active))
-            continue
-
-        if user.username not in actual.unix_uids:
-            # passdb survived a recreation of the container but the unix
-            # account of this entry did not. smbd needs that account to map the
-            # NT hash.
-            # create_unix_user is idempotent, so this is safe to re-emit.
-            actions.append(RepairUnixAccount(username=user.username, uid=account.uid))
-        if account.uid != uid:
-            # The entry can be the account of a former holder of the name. A
-            # chown would give the folder of that holder to the new user, an
-            # enable would open the old login again, and a workflow for the new
-            # user would give that user the scans of the old login. Closing the
-            # login gives nothing to anyone, and after a lowered UID_BASE the
-            # login is the member's own, so a deactivation still closes it.
+    # The lines are in the order of the uids, which does not change with a
+    # rename or with the order in which paperless lists the users, so a map
+    # that is up to date compares equal.
+    logins: dict[str, str] = {}
+    for uid in sorted(members):
+        user = members[uid]
+        if _VALID_USERNAME.match(user.username):
+            logins[account_name(uid)] = user.username
+        else:
             warnings.append(
-                f"account '{user.username}' stores uid {account.uid}, but the "
-                f"paperless user of that name maps to uid {uid}. The daemon "
-                f"leaves the folder and the workflow of this name as they are "
-                f"and does not enable the login. If another user had the name "
-                f"before, take the user out of the sync group until the old "
-                f"account is gone, then add the user again."
+                f"user '{user.username}' is not a valid unix account name and "
+                f"was skipped. Rename the user in paperless to provision it."
             )
-            if account.enabled and not user.is_active:
-                actions.append(DisableAccount(username=user.username))
-            continue
-        actions.extend(_state_change(user.username, account.enabled, user.is_active))
-        actions.extend(_missing_folder(user, uid, folders_by_name))
-        actions.extend(_missing_workflow(user, workflows_by_username))
+    lines = (
+        *(map_line(account, login) for account, login in logins.items()),
+        MAP_LAST_LINE,
+    )
+    if lines != actual.map_lines:
+        # The map goes first: a creation and a document of this plan give a
+        # person a login name, and the map has to carry it by then.
+        actions.append(WriteMap(lines=lines))
 
-    claimed_names = desired_names | renamed_from
-    protected_names = {a.username for a in counted if a.uid in invalid_uids}
-
-    for account in actual.accounts:
-        if (
-            counted_uid(account, uid_base) is None
-            and account.username not in desired_names
-        ):
-            warnings.append(
-                f"samba entry '{account.username}' stores no uid of the managed "
-                f"range and was left untouched"
-            )
-
-    # a folder carrying the uid a desired user maps to still holds that
-    # user's data even under a stale name (half-completed rename), so it
-    # must never be deleted
-    expected_uid_owner = {uid_base + u.id: u.username for u in valid}
-
-    stale_accounts = {
-        a.username: a
-        for a in counted
-        if a.uid not in invalid_uids and a.username not in claimed_names
-    }
-
-    for folder in actual.folders:
-        if folder.name in claimed_names:
-            continue
-        if folder.uid < uid_base:
-            warnings.append(
-                f"unmanaged folder '{folder.name}' (uid {folder.uid}) left untouched"
-            )
-        elif folder.uid in expected_uid_owner:
-            warnings.append(
-                f"folder '{folder.name}' has uid {folder.uid} belonging to "
-                f"user '{expected_uid_owner[folder.uid]}' (possibly an "
-                f"interrupted rename) and was left untouched"
-            )
-        elif (
-            folder.name not in accounts_by_name
-            or accounts_by_name[folder.name].uid != folder.uid
-        ):
-            # a folder alone does not prove that the daemon made it, so it
-            # goes only together with its account
-            warnings.append(
-                f"folder '{folder.name}' (uid {folder.uid}) belongs to no managed "
-                f"samba account and was left untouched"
-            )
-
-    if actual.token_user is not None and delivery is None:
-        warnings.append(NO_SUPERUSER_WARNING)
+    # This plan takes the line of an account that it removes out of the map,
+    # so the login name of such an account comes from the map as the cycle
+    # read it.
+    read_logins = map_logins(actual.map_lines)
     held: set[int] = set()
-    for name in sorted(stale_accounts):
-        workflow = workflows_by_username.get(name)
-        inbox = folders_by_name.get(name)
-        documents = _removal_documents(
-            stale_accounts[name],
-            uid_base,
-            expected_uid_owner,
-            actual.documents,
-            delivery,
-        )
+    for account in counted:
+        user = members.get(account.uid)
+        if user is not None:
+            # a member without a line keeps the account, the folder and the
+            # workflow, and only the login name is gone
+            actions.extend(
+                _member_actions(user, account, actual.unix_uids, folders, workflows)
+            )
+            continue
+        user_id = account.uid - uid_base
+        login_name = read_logins.get(account.name)
+        documents = _removal_documents(user_id, login_name, actual.documents, delivery)
         held.update(documents or ())
+        workflow = workflows.get(account.name)
+        folder = folders.get(account.name)
         actions.append(
             Deprovision(
-                username=name,
-                user_id=stale_accounts[name].uid - uid_base,
+                account=account.name,
+                user_id=user_id,
+                login_name=login_name,
                 workflow_id=workflow.id if workflow else None,
-                delete_folder=inbox is not None
-                and inbox.uid == stale_accounts[name].uid
-                and inbox.uid not in expected_uid_owner,
+                # a folder with another owner is not one that the daemon made
+                # for this entry, so its scans stay
+                delete_folder=folder is not None and folder.uid == account.uid,
                 documents=documents,
             )
         )
 
+    created: set[str] = set()
+    for uid in sorted(members):
+        account = account_name(uid)
+        if account not in logins or uid in entry_uids:
+            continue
+        user = members[uid]
+        # the cycle after this one finds the entry and makes the folder
+        actions.append(CreateAccount(user=user, uid=uid, upload=delivery is not None))
+        # a workflow that is left under the account name belongs to this
+        # account
+        actions.extend(_workflow_action(user, account, workflows))
+        if not user.is_active:
+            # smbpasswd -a creates the account enabled
+            actions.append(DisableAccount(account=account))
+        created.add(account)
+
+    for entry in actual.accounts:
+        if entry.username not in counted_names and entry.username not in created:
+            warnings.append(
+                f"samba entry '{entry.username}' is no account of smb-sync and was "
+                f"left untouched"
+            )
+
+    for folder in actual.folders:
+        # a folder alone does not prove that the daemon made it, so it goes
+        # only together with its account
+        if folder.name not in counted_names:
+            warnings.append(
+                f"folder '{folder.name}' (uid {folder.uid}) belongs to no account "
+                f"of smb-sync and was left untouched"
+            )
+
+    if actual.token_user is not None and delivery is None:
+        warnings.append(NO_SUPERUSER_WARNING)
+
     # paperless imports a scan with or without a workflow, and the workflow
-    # only sets the owner. So the workflow of an account that waits for its
-    # removal goes inside that removal, after the login closed, and a scan
-    # that arrives while the login of a user who left the group is still open
-    # still gets that user as its owner.
+    # only sets the owner. So the workflow of a counted entry goes inside the
+    # removal of that entry, after the login closed, and a scan that arrives
+    # while the login of a user who left the group is still open still gets
+    # that user as its owner.
     for workflow in actual.workflows:
-        if (
-            workflow.name not in claimed_names
-            and workflow.name not in stale_accounts
-            and workflow.name not in protected_names
-        ):
+        if workflow.name not in counted_names and workflow.name not in created:
             actions.append(DeleteWorkflow(workflow_id=workflow.id))
 
     if delivery is not None:
-        users_by_id = {u.id: u for u in valid}
-        desired_ids = {u.id for u in desired}
+        users_with_line = {
+            user.id: user
+            for uid, user in members.items()
+            if account_name(uid) in logins
+        }
+        member_ids = {user.id for user in members.values()}
         for document in actual.documents:
             if document.id in held:
                 continue
@@ -409,9 +325,9 @@ def plan_cycle(
                 )
                 continue
             action = _document_action(
-                document, delivery, users_by_id, desired_ids, accounts_by_uid, uid_base
+                document, delivery, users_with_line, member_ids, entry_uids, uid_base
             )
             if action is not None:
                 actions.append(action)
 
-    return Plan(actions=tuple(actions), warnings=tuple(warnings))
+    return Plan(actions=tuple(actions), warnings=tuple(warnings), logins=logins)

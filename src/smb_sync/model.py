@@ -1,5 +1,13 @@
-from collections.abc import Mapping
+import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+
+# The line gives each name without a line of its own to nobody, so that Samba
+# refuses a login under an account name and under each unknown name.
+MAP_LAST_LINE = "!nobody = *"
+
+_MAP_LINE = re.compile(r"!(u[0-9]+) = (.+)")
+_MARK = re.compile(r"smb-sync uid=([0-9]+) joined=([0-9]+)")
 
 
 @dataclass(frozen=True)
@@ -14,14 +22,15 @@ class PaperlessUser:
 @dataclass(frozen=True)
 class SambaAccount:
     username: str
-    uid: int | None
+    description: str
     enabled: bool
 
 
 @dataclass(frozen=True)
 class ManagedAccount:
-    username: str
+    name: str
     uid: int
+    joined: int
     enabled: bool
 
 
@@ -58,6 +67,7 @@ class ActualState:
     folders: tuple[InboxFolder, ...]
     workflows: tuple[ManagedWorkflow, ...]
     unix_uids: Mapping[str, int]
+    map_lines: tuple[str, ...]
     documents: tuple[CredentialDocument, ...]
     token_user: TokenUser | None
 
@@ -71,14 +81,14 @@ class CreateAccount:
 
 @dataclass(frozen=True)
 class CreateFolder:
-    username: str
+    account: str
     uid: int
 
 
 @dataclass(frozen=True)
 class CreateWorkflow:
     user_id: int
-    username: str
+    account: str
 
 
 @dataclass(frozen=True)
@@ -93,8 +103,9 @@ class DeleteWorkflow:
 
 @dataclass(frozen=True)
 class Deprovision:
-    username: str
+    account: str
     user_id: int
+    login_name: str | None
     workflow_id: int | None
     delete_folder: bool
     documents: tuple[int, ...] | None
@@ -102,12 +113,12 @@ class Deprovision:
 
 @dataclass(frozen=True)
 class DisableAccount:
-    username: str
+    account: str
 
 
 @dataclass(frozen=True)
 class EnableAccount:
-    username: str
+    account: str
 
 
 @dataclass(frozen=True)
@@ -125,17 +136,8 @@ class RenameDocument:
 
 
 @dataclass(frozen=True)
-class RenameUser:
-    old_username: str
-    new_username: str
-    uid: int
-    user_id: int
-    workflow_id: int | None
-
-
-@dataclass(frozen=True)
 class RepairUnixAccount:
-    username: str
+    account: str
     uid: int
 
 
@@ -143,7 +145,12 @@ class RepairUnixAccount:
 class UpdateWorkflow:
     workflow_id: int
     user_id: int
-    username: str
+    account: str
+
+
+@dataclass(frozen=True)
+class WriteMap:
+    lines: tuple[str, ...]
 
 
 Action = (
@@ -157,9 +164,9 @@ Action = (
     | EnableAccount
     | HandOverDocument
     | RenameDocument
-    | RenameUser
     | RepairUnixAccount
     | UpdateWorkflow
+    | WriteMap
 )
 
 
@@ -167,10 +174,42 @@ Action = (
 class Plan:
     actions: tuple[Action, ...]
     warnings: tuple[str, ...]
+    logins: Mapping[str, str]
 
 
-def workflow_filter(consume_path: str, username: str) -> str:
+def account_name(uid: int) -> str:
+    return f"u{uid}"
+
+
+def entry_mark(uid: int, joined: int) -> str:
+    return f"smb-sync uid={uid} joined={joined}"
+
+
+def login_key(name: str) -> tuple[int, str]:
+    # Samba compares two names character by character and without case. So two
+    # names of another length are never one name, and casefold() alone takes
+    # straße and strasse for one.
+    return len(name), name.casefold()
+
+
+def map_line(account: str, login: str) -> str:
+    return f"!{account} = {login}"
+
+
+def map_logins(lines: Iterable[str]) -> dict[str, str]:
+    matches = (_MAP_LINE.fullmatch(line) for line in lines)
+    return {match[1]: match[2] for match in matches if match is not None}
+
+
+def parse_mark(description: str) -> tuple[int, int] | None:
+    match = _MARK.fullmatch(description)
+    if match is None:
+        return None
+    return int(match[1]), int(match[2])
+
+
+def workflow_filter(consume_path: str, account: str) -> str:
     # paperless matches the filter with fnmatch against the absolute path of
     # the scan, and * there also matches /. Anchored at the consume path, it
     # cannot match a folder of that name inside the inbox of another user.
-    return f"{consume_path}/{username}/*"
+    return f"{consume_path}/{account}/*"

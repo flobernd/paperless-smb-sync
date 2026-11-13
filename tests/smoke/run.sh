@@ -553,6 +553,21 @@ api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"is_active":true}' >/dev/null \
 quiet_cycle
 smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once he was active again"
 
+echo "== asserting that a cycle ends a session left on a closed login =="
+open_session dave "$DAVE_PASSWORD" || fail "could not open a session of dave"
+wait_for "the session of dave did not appear" has_session "$DAVE"
+# a closed entry with an open session is the state after a stop that failed
+compose exec -T smb smbpasswd -d "$DAVE" >/dev/null || fail "could not close the entry of dave"
+api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"is_active":false}' >/dev/null \
+    || fail "could not deactivate dave"
+quiet_cycle
+wait_for "the session of dave on a closed entry did not end" no_session "$DAVE"
+entry_closed "$DAVE" || fail "the entry of dave did not stay closed"
+api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"is_active":true}' >/dev/null \
+    || fail "could not activate dave"
+quiet_cycle
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once he was active again"
+
 echo "== asserting the hold for an entry of another join date =="
 ERIN_ID=$(api -X POST "$API/api/users/" \
     -d "{\"username\":\"erin\",\"password\":\"paperless-pass\",\"groups\":[$GROUP_ID]}" | jq -r .id)

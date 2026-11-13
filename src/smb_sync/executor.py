@@ -1,6 +1,5 @@
 import logging
-from collections.abc import Callable, Sequence
-from functools import partial
+from collections.abc import Sequence
 
 from .credentials import credentials_block, generate_password
 from .model import (
@@ -37,7 +36,6 @@ def execute(
     smb_host: str,
     share_name: str,
 ) -> int:
-    upload_credentials = partial(_upload_credentials, api, smb_host, share_name)
     failures = 0
     map_failed = False
     held = 0
@@ -52,7 +50,7 @@ def execute(
             held += 1
             continue
         try:
-            _apply(action, system, api, upload_credentials)
+            _apply(action, system, api, smb_host, share_name)
         except Exception as exc:
             failures += 1
             map_failed = map_failed or isinstance(action, WriteMap)
@@ -100,6 +98,13 @@ def _upload_credentials(
         )
 
 
+def _close_login(system: SystemAdapter, account: str) -> None:
+    system.disable_samba_account(account)
+    # The disabled flag goes first, so a client that connects again by
+    # itself after the stop gets no new session.
+    system.stop_sessions(account)
+
+
 def _named(account: str, login_name: str | None) -> str:
     if login_name is None:
         return f"'{account}'"
@@ -110,7 +115,8 @@ def _apply(
     action: Action,
     system: SystemAdapter,
     api: PaperlessClient,
-    upload_credentials: Callable[[PaperlessUser, str], None],
+    smb_host: str,
+    share_name: str,
 ) -> None:
     match action:
         case WriteMap(lines=lines):
@@ -139,7 +145,7 @@ def _apply(
                 user.username,
             )
             if upload:
-                upload_credentials(user, password)
+                _upload_credentials(api, smb_host, share_name, user, password)
         case RepairUnixAccount(account=account, uid=uid):
             system.create_unix_user(account, uid)
             log.warning(
@@ -176,10 +182,7 @@ def _apply(
             # once the unix account is gone, since smbpasswd -d and pdbedit -x
             # need no unix account. The login closes first, so a removal that
             # stops half way leaves no open login.
-            system.disable_samba_account(account)
-            # The disabled flag goes first, so a client that connects again by
-            # itself after the stop gets no new session.
-            system.stop_sessions(account)
+            _close_login(system, account)
             if workflow_id is not None:
                 api.delete_workflow(workflow_id)
                 log.info("deleted workflow %d", workflow_id)
@@ -196,10 +199,7 @@ def _apply(
             system.delete_samba_account(account)
             log.info("deleted samba account %s", _named(account, login_name))
         case DisableAccount(account=account):
-            system.disable_samba_account(account)
-            # The disabled flag goes first, so a client that connects again by
-            # itself after the stop gets no new session.
-            system.stop_sessions(account)
+            _close_login(system, account)
             log.info("disabled samba account '%s'", account)
         case EnableAccount(account=account):
             system.enable_samba_account(account)

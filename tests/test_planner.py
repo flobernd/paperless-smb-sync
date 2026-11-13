@@ -63,7 +63,7 @@ def state(**fields):
         accounts=(),
         folders=(),
         workflows=(),
-        unix_uids={},
+        unix_names=frozenset(),
         map_lines=("!nobody = *",),
         documents=(),
         token_user=None,
@@ -78,7 +78,7 @@ def settled(*logins):
         accounts=tuple(entry(i) for i in ids),
         folders=tuple(folder(i) for i in ids),
         workflows=tuple(workflow(100 + i, i) for i in ids),
-        unix_uids={f"u{UID_BASE + i}": UID_BASE + i for i in ids},
+        unix_names=frozenset(f"u{UID_BASE + i}" for i in ids),
         map_lines=tuple(f"!u{UID_BASE + i} = {name}" for i, name in logins) + ("!nobody = *",),
     )
 
@@ -106,7 +106,7 @@ def test_a_rename_in_paperless_writes_the_map_and_retitles_the_document():
 def test_a_member_whose_entry_has_no_mark_gets_the_account_made_again():
     # a creation that stopped between the password and the mark
     alice = member(5, "alice")
-    actual = state(accounts=(SambaAccount("u20005", "", True),), unix_uids={"u20005": 20005})
+    actual = state(accounts=(SambaAccount("u20005", "", True),), unix_names=frozenset({"u20005"}))
     plan = planned([alice], actual)
     assert plan.actions == (
         WriteMap(("!u20005 = alice", "!nobody = *")),
@@ -165,7 +165,7 @@ def test_a_folder_with_another_owner_or_group_is_repaired(found):
 
 
 def test_a_missing_unix_account_is_made_again_from_the_mark():
-    actual = replace(settled((5, "alice")), unix_uids={})
+    actual = replace(settled((5, "alice")), unix_names=frozenset())
     assert planned([member(5, "alice")], actual).actions == (
         RepairUnixAccount(account="u20005", uid=20005),
     )

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 # The line gives each name without a line of its own to nobody, so that Samba
 # refuses a login under an account name and under each unknown name.
-MAP_LAST_LINE = "!nobody = *"
+_MAP_LAST_LINE = "!nobody = *"
 
 _MAP_LINE = re.compile(r"!(u[0-9]+) = (.+)")
 _MARK = re.compile(r"smb-sync uid=([0-9]+) joined=([0-9]+)")
@@ -30,6 +30,7 @@ class SambaAccount:
 class ManagedAccount:
     name: str
     uid: int
+    user_id: int
     joined: int
     enabled: bool
 
@@ -67,7 +68,7 @@ class ActualState:
     accounts: tuple[SambaAccount, ...]
     folders: tuple[InboxFolder, ...]
     workflows: tuple[ManagedWorkflow, ...]
-    unix_uids: Mapping[str, int]
+    unix_names: frozenset[str]
     map_lines: tuple[str, ...]
     documents: tuple[CredentialDocument, ...]
     token_user: TokenUser | None
@@ -200,7 +201,7 @@ def login_key(name: str) -> tuple[str, ...]:
     return tuple(c.casefold() for c in name)
 
 
-def map_line(account: str, login: str) -> str:
+def _map_line(account: str, login: str) -> str:
     return f"!{account} = {login}"
 
 
@@ -214,6 +215,13 @@ def parse_mark(description: str) -> tuple[int, int] | None:
     if match is None:
         return None
     return int(match[1]), int(match[2])
+
+
+def render_map(logins: Mapping[str, str]) -> tuple[str, ...]:
+    return (
+        *(_map_line(account, login) for account, login in logins.items()),
+        _MAP_LAST_LINE,
+    )
 
 
 def workflow_filter(consume_path: str, account: str) -> str:

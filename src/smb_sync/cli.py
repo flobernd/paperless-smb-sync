@@ -18,6 +18,7 @@ from .paperless import PaperlessClient, PaperlessError
 from .planner import (
     NO_SUPERUSER_WARNING,
     counted_accounts,
+    members_by_uid,
     plan_cycle,
     user_documents,
 )
@@ -63,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 def format_status(
     users: list[PaperlessUser], actual: ActualState, plan: Plan, uid_base: int
 ) -> str:
-    members = {uid_base + u.id: u for u in users if u.member}
+    members = members_by_uid(users, uid_base)
     entries = {a.uid: a for a in counted_accounts(actual.accounts, uid_base)}
     # the plan drops the line of an account that it removes, so the name of
     # such an account comes from the map as the cycle read it
@@ -154,25 +155,19 @@ def regen_password(
     # is held from the map read to the document.
     with cycle_lock(lock_path):
         typed = login_key(login_name)
-        line = next(
-            (
-                (account, login)
-                for account, login in map_logins(system.read_usermap() or ()).items()
-                if login_key(login) == typed
-            ),
-            None,
+        logins = map_logins(system.read_usermap() or ())
+        account = next(
+            (a for a, login in logins.items() if login_key(login) == typed), None
         )
         entries = counted_accounts(system.list_samba_accounts(), cfg.uid_base)
-        entry = None
-        if line is not None:
-            entry = next((e for e in entries if e.name == line[0]), None)
-        if line is None or entry is None:
+        entry = next((e for e in entries if e.name == account), None)
+        if entry is None:
             print(
                 f"no managed account for the login name '{login_name}'",
                 file=sys.stderr,
             )
             return 1
-        account, login = line
+        account, login = entry.name, logins[entry.name]
         password = generate_password()
         system.set_samba_password(account, password, create=False)
         if not entry.enabled:
@@ -181,7 +176,7 @@ def regen_password(
             system.disable_samba_account(account)
         print(credentials_block(cfg.smb_host, cfg.share_name, login, password))
         if cfg.credentials_document:
-            _update_document(cfg, api, login, entry.uid - cfg.uid_base, password)
+            _update_document(cfg, api, login, entry.user_id, password)
         return 0
 
 

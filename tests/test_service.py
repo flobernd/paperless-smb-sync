@@ -81,8 +81,8 @@ class FakeSystem:
     def list_inbox_folders(self):
         return []
 
-    def list_unix_uids(self):
-        return {}
+    def list_unix_names(self):
+        return frozenset()
 
     def read_usermap(self):
         return None

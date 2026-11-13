@@ -228,9 +228,22 @@ def test_list_inbox_folders_missing_root_raises(tmp_path):
 
 
 def test_delete_samba_account_missing_is_noop(tmp_path):
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
+    adapter, _ = make_adapter(
+        tmp_path,
+        {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE},
+        fail_prefix=("pdbedit", "-x", "-u", "ghost"),
+    )
     adapter.delete_samba_account("ghost")
-    assert [c[0] for c in run.calls] == [("pdbedit", "-L", "-v")]
+
+
+def test_a_failed_delete_of_a_listed_entry_raises(tmp_path):
+    adapter, _ = make_adapter(
+        tmp_path,
+        {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE},
+        fail_prefix=("pdbedit", "-x", "-u", "u20005"),
+    )
+    with pytest.raises(CommandError, match="pdbedit -x -u u20005"):
+        adapter.delete_samba_account("u20005")
 
 
 def test_delete_samba_account_present_runs_pdbedit(tmp_path):

@@ -48,9 +48,7 @@ def _read_bool(env: Mapping[str, str], name: str) -> bool:
     )
 
 
-def _read_int(
-    env: Mapping[str, str], name: str, default: int, minimum: int | None = None
-) -> int:
+def _read_int(env: Mapping[str, str], name: str, default: int, minimum: int) -> int:
     raw = env.get(name)
     if raw is None:
         return default
@@ -58,7 +56,7 @@ def _read_int(
         value = int(raw)
     except ValueError:
         raise ValueError(f"{name} must be an integer, got {raw!r}") from None
-    if minimum is not None and value < minimum:
+    if value < minimum:
         raise ValueError(f"{name} must be {minimum} or more, got {value}")
     return value
 

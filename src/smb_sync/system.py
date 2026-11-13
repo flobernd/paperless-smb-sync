@@ -16,14 +16,17 @@ from .model import InboxFolder, SambaAccount, entry_mark
 INBOX_ROOT = "/shares/inbox"
 
 # The volume that holds passdb, so the map survives a recreation of the
-# container together with the entries that its lines name.
+# container together with the entries that its lines name. The `username map`
+# line of the share template and the smoke test use the path of the map, so
+# they change together with this constant and _USERMAP.
 STATE_DIR = "/var/lib/samba"
 
 # The entrypoint makes this group and the share template admits its members,
 # so the three change together.
 ACCOUNT_GROUP = "smb-sync"
 
-_UID_BASE = "smb-sync-uid-base"
+UID_BASE_FILE = "smb-sync-uid-base"
+_FOLDER_MODE = 0o2770
 _USERMAP = "smb-sync-usermap"
 
 
@@ -94,7 +97,7 @@ class SystemAdapter:
         self._inbox = Path(inbox_path)
         self._gid = paperless_gid
         self._run = run or _run
-        self._uid_base = Path(state_dir) / _UID_BASE
+        self._uid_base = Path(state_dir) / UID_BASE_FILE
         self._usermap = Path(state_dir) / _USERMAP
 
     # -- observation -------------------------------------------------
@@ -122,8 +125,8 @@ class SystemAdapter:
             for entry in entries
         ]
 
-    def list_unix_uids(self) -> dict[str, int]:
-        return {entry.pw_name: entry.pw_uid for entry in pwd.getpwall()}
+    def list_unix_names(self) -> frozenset[str]:
+        return frozenset(entry.pw_name for entry in pwd.getpwall())
 
     def list_inbox_folders(self) -> list[InboxFolder]:
         folders: list[InboxFolder] = []
@@ -197,11 +200,13 @@ class SystemAdapter:
         self._run(argv, input_text=f"{password}\n{password}\n")
 
     def delete_samba_account(self, username: str) -> None:
-        # idempotent so a retried deprovision after a partial failure succeeds
-        if all(a.username != username for a in self.list_samba_accounts()):
-            return
         # smbpasswd -x fails for an entry without a unix account
-        self._run(["pdbedit", "-x", "-u", username])
+        try:
+            self._run(["pdbedit", "-x", "-u", username])
+        except CommandError:
+            # idempotent so a retried deprovision after a partial failure succeeds
+            if any(a.username == username for a in self.list_samba_accounts()):
+                raise
 
     def disable_samba_account(self, username: str) -> None:
         self._run(["smbpasswd", "-d", username])
@@ -269,7 +274,7 @@ class SystemAdapter:
         with _command_error(f"cannot create inbox folder '{path}'"):
             path.mkdir(exist_ok=True)
             os.chown(path, uid, self._gid)
-            path.chmod(0o2770)
+            path.chmod(_FOLDER_MODE)
 
     def repair_inbox_folder(self, account: str, uid: int) -> None:
         path = self._inbox / account
@@ -295,7 +300,7 @@ class SystemAdapter:
                 for name in (*dirnames, *filenames):
                     os.chown(name, -1, self._gid, dir_fd=dir_fd, follow_symlinks=False)
             os.chown(path, uid, self._gid)
-            path.chmod(0o2770)
+            path.chmod(_FOLDER_MODE)
 
     def delete_inbox_folder(self, username: str) -> None:
         path = self._inbox / username

@@ -1,7 +1,7 @@
 import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -60,8 +60,7 @@ _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 def _join_date(raw: str) -> int:
     # cut to milliseconds and never rounded, as the export of paperless cuts a
     # timestamp, so that an entry still fits its user after an export and import
-    delta = datetime.fromisoformat(raw) - _EPOCH
-    return (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
+    return (datetime.fromisoformat(raw) - _EPOCH) // timedelta(milliseconds=1)
 
 
 def _workflow_payload(user_id: int, account: str, consume_path: str) -> dict[str, Any]:

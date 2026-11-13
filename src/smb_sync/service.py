@@ -9,15 +9,15 @@ from pathlib import Path
 from .config import Config
 from .executor import execute
 from .model import (
-    MAP_LAST_LINE,
     ActualState,
     CredentialDocument,
     PaperlessUser,
     TokenUser,
+    render_map,
 )
 from .paperless import PaperlessClient, PaperlessError
 from .planner import counted_accounts, plan_cycle
-from .system import CommandError, SystemAdapter
+from .system import UID_BASE_FILE, CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ def observe(
         accounts=tuple(system.list_samba_accounts()),
         folders=tuple(system.list_inbox_folders()),
         workflows=tuple(workflows),
-        unix_uids=system.list_unix_uids(),
+        unix_names=system.list_unix_names(),
         map_lines=system.read_usermap() or (),
         documents=documents,
         token_user=token_user,
@@ -199,7 +199,7 @@ def check_volume(system: SystemAdapter, uid_base: int) -> str | None:
         if any(a.description.startswith("smb-sync") for a in accounts):
             return (
                 "the Samba volume holds accounts of an earlier version of smb-sync, "
-                "or it lost the file smb-sync-uid-base. This version needs an empty "
+                f"or it lost the file {UID_BASE_FILE}. This version needs an empty "
                 "Samba volume and an empty inbox volume, and each user then gets a "
                 "new password."
             )
@@ -213,5 +213,5 @@ def check_volume(system: SystemAdapter, uid_base: int) -> str | None:
     # without the map, an account name is a login name until the first cycle
     # writes it
     if system.read_usermap() is None:
-        system.write_usermap((MAP_LAST_LINE,))
+        system.write_usermap(render_map({}))
     return None

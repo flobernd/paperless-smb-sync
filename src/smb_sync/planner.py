@@ -2,7 +2,6 @@ import re
 from collections.abc import Container, Iterable, Mapping, Sequence
 
 from .model import (
-    MAP_LAST_LINE,
     Action,
     ActualState,
     CreateAccount,
@@ -29,9 +28,9 @@ from .model import (
     WriteMap,
     account_name,
     login_key,
-    map_line,
     map_logins,
     parse_mark,
+    render_map,
 )
 
 NO_SUPERUSER_WARNING = (
@@ -63,11 +62,18 @@ def counted_accounts(
                 ManagedAccount(
                     name=account.username,
                     uid=uid,
+                    user_id=uid - uid_base,
                     joined=joined,
                     enabled=account.enabled,
                 )
             )
     return tuple(sorted(counted, key=lambda a: a.uid))
+
+
+def members_by_uid(
+    users: Iterable[PaperlessUser], uid_base: int
+) -> dict[int, PaperlessUser]:
+    return {uid_base + u.id: u for u in users if u.member}
 
 
 def _login_names(
@@ -136,13 +142,13 @@ def _workflow_action(
 def _member_actions(
     user: PaperlessUser,
     account: ManagedAccount,
-    unix_uids: Container[str],
+    unix_names: Container[str],
     folders: Mapping[str, InboxFolder],
     workflows: Mapping[str, ManagedWorkflow],
     paperless_gid: int,
 ) -> list[Action]:
     actions: list[Action] = []
-    if account.name not in unix_uids:
+    if account.name not in unix_names:
         # passdb survived a recreation of the container but the unix
         # account of this entry did not. smbd needs that account to map the
         # NT hash.
@@ -210,8 +216,7 @@ def _document_action(
     token_user: TokenUser,
     users_with_line: Mapping[int, PaperlessUser],
     member_ids: Container[int],
-    entry_uids: Container[int],
-    uid_base: int,
+    entry_user_ids: Container[int],
 ) -> Action | None:
     if document.owner_id is None:
         # every user can read a document whose owner was deleted
@@ -234,7 +239,7 @@ def _document_action(
         # the document
         if (
             document.recipient_id not in member_ids
-            and uid_base + document.recipient_id not in entry_uids
+            and document.recipient_id not in entry_user_ids
         ):
             return DeleteDocument(document_id=document.id)
         return None
@@ -259,7 +264,7 @@ def plan_cycle(
     warnings: list[str] = []
 
     users_by_uid = {uid_base + u.id: u for u in users}
-    members = {uid_base + u.id: u for u in users if u.member}
+    members = members_by_uid(users, uid_base)
     counted = counted_accounts(actual.accounts, uid_base)
     counted_names = {a.name for a in counted}
     entry_uids = {a.uid for a in counted}
@@ -314,10 +319,7 @@ def plan_cycle(
     # that is up to date compares equal.
     logins, name_warnings = _login_names(candidates, read_logins)
     warnings.extend(name_warnings)
-    lines = (
-        *(map_line(account, login) for account, login in logins.items()),
-        MAP_LAST_LINE,
-    )
+    lines = render_map(logins)
     if lines != actual.map_lines:
         # The map goes first: a creation and a document of this plan give a
         # person a login name, and the map has to carry it by then.
@@ -330,7 +332,7 @@ def plan_cycle(
                 actions.append(DisableAccount(account=account.name))
             warnings.append(
                 f"samba entry '{account.name}' was made for another paperless user "
-                f"than the user {account.uid - uid_base} of this database. Its login "
+                f"than the user {account.user_id} of this database. Its login "
                 f"is closed and nothing else changes. Point the daemon to the "
                 f"paperless database of this entry, or start with empty volumes."
             )
@@ -341,7 +343,7 @@ def plan_cycle(
             # workflow, and only the login name is gone
             actions.extend(
                 _member_actions(
-                    user, account, actual.unix_uids, folders, workflows, paperless_gid
+                    user, account, actual.unix_names, folders, workflows, paperless_gid
                 )
             )
             continue
@@ -349,7 +351,7 @@ def plan_cycle(
             if account.enabled:
                 actions.append(DisableAccount(account=account.name))
             continue
-        user_id = account.uid - uid_base
+        user_id = account.user_id
         # This plan takes the line of an account that it removes out of the
         # map, so the login name of such an account comes from the map as the
         # cycle read it.
@@ -422,10 +424,9 @@ def plan_cycle(
     # removal of that entry, after the login closed, and a scan that arrives
     # while the login of a user who left the group is still open still gets
     # that user as its owner.
-    if not hold:
-        for workflow in actual.workflows:
-            if workflow.name not in counted_names and workflow.name not in created:
-                actions.append(DeleteWorkflow(workflow_id=workflow.id))
+    for workflow in actual.workflows:
+        if workflow.name not in counted_names and workflow.name not in created:
+            actions.append(DeleteWorkflow(workflow_id=workflow.id))
 
     if delivery is not None:
         users_with_line = {
@@ -434,6 +435,7 @@ def plan_cycle(
             if account_name(uid) in logins
         }
         member_ids = {user.id for user in members.values()}
+        entry_user_ids = {a.user_id for a in counted}
         for document in actual.documents:
             if document.id in held:
                 continue
@@ -449,9 +451,13 @@ def plan_cycle(
                 )
                 continue
             action = _document_action(
-                document, delivery, users_with_line, member_ids, entry_uids, uid_base
+                document, delivery, users_with_line, member_ids, entry_user_ids
             )
-            if action is not None and not (hold and isinstance(action, DeleteDocument)):
+            if action is not None:
                 actions.append(action)
 
+    if hold:
+        actions = [
+            a for a in actions if not isinstance(a, (DeleteDocument, DeleteWorkflow))
+        ]
     return Plan(actions=tuple(actions), warnings=tuple(warnings), logins=logins)

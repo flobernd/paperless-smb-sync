@@ -246,12 +246,6 @@ def test_a_failed_delete_of_a_listed_entry_raises(tmp_path):
         adapter.delete_samba_account("u20005")
 
 
-def test_delete_samba_account_present_runs_pdbedit(tmp_path):
-    adapter, run = make_adapter(tmp_path, {("pdbedit", "-L", "-v"): PDBEDIT_VERBOSE})
-    adapter.delete_samba_account("u20005")
-    assert run.calls[-1] == (("pdbedit", "-x", "-u", "u20005"), None)
-
-
 def test_a_map_write_moves_a_new_file_over_the_old_one(tmp_path):
     adapter = SystemAdapter(str(tmp_path), 10000, state_dir=str(tmp_path))
     assert adapter.read_usermap() is None

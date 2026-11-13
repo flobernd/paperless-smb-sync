@@ -207,7 +207,12 @@ An export and import with the tools of paperless is no such case. The user ids s
 milliseconds, which the export keeps.
 
 A third way out fits one case only: one entry alone belongs to another person, and the operator knows that its former
-user is gone, for example after paperless gave a user id out a second time. The operator removes that entry by hand with
+user is gone, for example after paperless gave a user id out a second time. Before the operator removes the entry, its
+account must have no session left, because the new account of the member gets the same account name and the same uid,
+and a session that stays would work in the folder of the new account. The daemon closed the login of the entry and ended
+its sessions when the hold began, and `docker exec <container> smbstatus -b` shows whether one is left: it lists the
+sessions with the account name as the username. When it lists one of this account, the operator restarts the container,
+which ends each session, and looks again. The operator removes that entry by hand with
 `docker exec <container> pdbedit -x -u <account name>`, and then removes the inbox folder of that name. The hold ends
 when the entry is gone, unless paperless knows none of the entries that are left. Until the folder is gone as well, the
 daemon warns that the folder keeps the member from getting an account, and after that it makes a new account for the

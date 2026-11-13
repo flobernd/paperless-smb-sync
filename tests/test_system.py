@@ -2,6 +2,7 @@ import json
 import os
 import pwd
 import signal
+import stat
 import subprocess
 
 import pytest
@@ -185,7 +186,7 @@ def test_a_folder_repair_sets_the_group_below_and_follows_no_link(tmp_path, monk
     ]
 
 
-def test_a_folder_repair_that_cannot_read_a_subfolder_leaves_the_folder_as_it_was(tmp_path, monkeypatch):
+def test_a_folder_repair_that_cannot_read_a_subfolder_leaves_the_group_of_the_folder(tmp_path, monkeypatch):
     folder = tmp_path / "u20005"
     (folder / "2026").mkdir(parents=True)
     changed = []
@@ -200,6 +201,24 @@ def test_a_folder_repair_that_cannot_read_a_subfolder_leaves_the_folder_as_it_wa
     with pytest.raises(CommandError):
         SystemAdapter(str(tmp_path), 10000).repair_inbox_folder("u20005", 20005)
     assert changed == ["2026"]
+
+
+def test_a_folder_repair_takes_the_setgid_bit_off_the_folder_while_it_walks(tmp_path, monkeypatch):
+    folder = tmp_path / "u20005"
+    folder.mkdir()
+    folder.chmod(0o2770)
+    (folder / "scan.pdf").write_text("scan")
+    during = []
+
+    def chown(path, uid, gid, *, dir_fd=None, follow_symlinks=True):
+        if dir_fd is not None:
+            # a change below the folder, so the walk is not at its end
+            during.append(stat.S_IMODE(folder.stat().st_mode))
+
+    monkeypatch.setattr(os, "chown", chown)
+    SystemAdapter(str(tmp_path), 10000).repair_inbox_folder("u20005", 20005)
+    assert during == [0o770]
+    assert stat.S_IMODE(folder.stat().st_mode) == 0o2770
 
 
 def test_list_inbox_folders_missing_root_raises(tmp_path):

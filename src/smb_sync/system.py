@@ -240,16 +240,23 @@ class SystemAdapter:
     def repair_inbox_folder(self, account: str, uid: int) -> None:
         path = self._inbox / account
         with _command_error(f"cannot repair inbox folder '{path}'"):
+            # With the setgid bit and the old group on the folder, the kernel
+            # gives the old group to each entry that a session makes during the
+            # walk, and the walk does not list it. Without the bit such an entry
+            # gets the group of the session, which the share forces to the
+            # group of paperless.
+            os.chmod(path, 0o770)
             # A share user can swap a subfolder for a link between the listing
             # and the change, and the daemon runs as root. fwalk opens each
             # subfolder through the descriptor of its parent and enters no
             # link, and each change names its file through the descriptor of
             # the folder that listed it and follows no link. So no change
             # reaches a file outside the inbox.
-            # The planner compares the folder alone, so the folder goes last,
-            # and a repair that stopped below it is planned again in the next
-            # cycle. For the same reason a subfolder that the walk cannot read
-            # ends the repair, where fwalk would pass over it by default.
+            # The planner compares the folder alone, so its owner and its group
+            # go last, and a repair that stopped below it is planned again in
+            # the next cycle. For the same reason a subfolder that the walk
+            # cannot read ends the repair, where fwalk would pass over it by
+            # default.
             for _, dirnames, filenames, dir_fd in os.fwalk(path, onerror=_raise_error):
                 for name in (*dirnames, *filenames):
                     os.chown(name, -1, self._gid, dir_fd=dir_fd, follow_symlinks=False)

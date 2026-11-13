@@ -32,6 +32,10 @@ CFG = Config(
 )
 
 
+def member(user_id, username, active=True):
+    return PaperlessUser(user_id, username, active, 1731405600123, True)
+
+
 class FakeApi:
     def __init__(self, users=None, fail=False, token_user=None):
         self.users = users or []
@@ -40,7 +44,7 @@ class FakeApi:
         self._token_user = token_user
         self.uploaded = []
 
-    def fetch_desired_users(self, group_name):
+    def fetch_users(self, group_name):
         if self.fail:
             raise PaperlessError("api down")
         return self.users
@@ -102,14 +106,14 @@ def test_api_failure_skips_cycle_without_touching_system():
 
 
 def test_local_state_failure_skips_cycle():
-    api = FakeApi(users=[PaperlessUser(5, "alice", True)])
+    api = FakeApi(users=[member(5, "alice")])
     system = FakeSystem(fail_listing=True)
     assert run_cycle(CFG, api, system) is False
     assert system.calls == []
 
 
 def test_happy_path_provisions(capsys):
-    api = FakeApi(users=[PaperlessUser(5, "alice", True)])
+    api = FakeApi(users=[member(5, "alice")])
     system = FakeSystem()
     assert run_cycle(CFG, api, system) is True
     assert ("create_unix_user", "alice", 20005) in system.calls
@@ -130,7 +134,7 @@ def test_cycle_runs_while_it_holds_the_lock(tmp_path):
     seen = []
 
     class ProbingApi(FakeApi):
-        def fetch_desired_users(self, group_name):
+        def fetch_users(self, group_name):
             # a second open file description cannot take a held flock
             with open(lock_path, "a", encoding="utf-8") as other:
                 try:
@@ -150,7 +154,7 @@ class StopLoop(Exception):
 
 def test_daemon_survives_cycle_crash(monkeypatch, tmp_path):
     class CrashingApi:
-        def fetch_desired_users(self, group_name):
+        def fetch_users(self, group_name):
             # not a PaperlessError, so it escapes run_cycle and must be
             # swallowed by the daemon loop itself
             raise RuntimeError("boom")
@@ -185,12 +189,12 @@ def test_standing_warning_is_due_again_after_the_interval():
 
 def test_daemon_logs_a_standing_warning_once(monkeypatch, tmp_path, caplog):
     cycles = [
-        [PaperlessUser(5, "Bad Name", True)],
-        [PaperlessUser(5, "Bad Name", True), PaperlessUser(6, "Other Bad", True)],
+        [member(5, "Bad Name")],
+        [member(5, "Bad Name"), member(6, "Other Bad")],
     ]
 
     class ChangingApi(FakeApi):
-        def fetch_desired_users(self, group_name):
+        def fetch_users(self, group_name):
             return cycles.pop(0)
 
     def sleep(_seconds):
@@ -211,7 +215,7 @@ def test_daemon_logs_a_standing_warning_once(monkeypatch, tmp_path, caplog):
 
 
 def test_cycle_without_repeat_logs_a_standing_warning(caplog):
-    api = FakeApi(users=[PaperlessUser(5, "Bad Name", True)])
+    api = FakeApi(users=[member(5, "Bad Name")])
     with caplog.at_level(logging.WARNING):
         run_cycle(CFG, api, FakeSystem())
     assert "'Bad Name'" in caplog.text
@@ -221,7 +225,7 @@ DOCUMENT_CFG = replace(CFG, credentials_document=True)
 
 
 def test_only_a_superuser_token_uploads_a_document(caplog):
-    users = [PaperlessUser(5, "alice", True)]
+    users = [member(5, "alice")]
     admin = FakeApi(users=users, token_user=TokenUser(1, True))
     assert run_cycle(DOCUMENT_CFG, admin, FakeSystem()) is True
     assert admin.uploaded == [(5, "alice")]
@@ -246,7 +250,7 @@ class NoDocumentList(FakeApi):
 @pytest.mark.parametrize("api_class", [NoTokenUser, NoDocumentList])
 def test_a_failed_document_read_does_not_stop_the_cycle(api_class, caplog):
     api = api_class(
-        users=[PaperlessUser(5, "alice", True)], token_user=TokenUser(1, True)
+        users=[member(5, "alice")], token_user=TokenUser(1, True)
     )
     with caplog.at_level(logging.ERROR):
         assert run_cycle(DOCUMENT_CFG, api, FakeSystem()) is True
@@ -282,7 +286,7 @@ def test_daemon_drops_the_heartbeat_of_an_earlier_run(monkeypatch, tmp_path):
     seen = []
 
     class WatchingApi(FakeApi):
-        def fetch_desired_users(self, group_name):
+        def fetch_users(self, group_name):
             seen.append(heartbeat.exists())
             return []
 

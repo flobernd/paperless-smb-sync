@@ -34,6 +34,10 @@ def planned(desired, actual):
     return plan_cycle(desired, actual, UID_BASE, CONSUME)
 
 
+def member(user_id, username, active=True):
+    return PaperlessUser(user_id, username, active, 1731405600123, True)
+
+
 def workflow(workflow_id, username):
     return ManagedWorkflow(workflow_id, username, f"{CONSUME}/{username}/*")
 
@@ -63,13 +67,13 @@ def provisioned_state(username="alice", user_id=5, enabled=True, workflow_id=7):
 
 
 def test_steady_state_no_actions():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     plan = planned(desired, provisioned_state())
     assert plan.actions == ()
 
 
 def test_workflow_with_another_filter_is_updated():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
@@ -81,26 +85,26 @@ def test_workflow_with_another_filter_is_updated():
 
 
 def test_inactive_user_disabled():
-    desired = [PaperlessUser(5, "alice", False)]
+    desired = [member(5, "alice", active=False)]
     plan = planned(desired, provisioned_state(enabled=True))
     assert plan.actions == (DisableAccount(username="alice"),)
 
 
 def test_reactivated_user_enabled():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     plan = planned(desired, provisioned_state(enabled=False))
     assert plan.actions == (EnableAccount(username="alice"),)
 
 
 def test_new_inactive_user_provisioned_disabled():
-    desired = [PaperlessUser(5, "alice", False)]
+    desired = [member(5, "alice", active=False)]
     plan = planned(desired, empty_state())
     assert DisableAccount(username="alice") in plan.actions
     assert CreateAccount(user=desired[0], uid=20005, upload=False) in plan.actions
 
 
 def test_missing_folder_and_workflow_repaired():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(),
@@ -117,7 +121,7 @@ def test_missing_folder_and_workflow_repaired():
 def test_existing_folder_wrong_uid_is_adopted():
     # steady state: the folder is present under the right name but carries a
     # stale uid, so the planner corrects its owner for the account to write to it
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 1000),),
@@ -131,7 +135,7 @@ def test_existing_folder_wrong_uid_is_adopted():
 def test_new_account_adopts_an_existing_folder_with_another_uid():
     # no account yet, but an inbox folder of that name exists under another
     # uid and must be adopted
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = state(
         accounts=(),
         folders=(InboxFolder("alice", 1000),),
@@ -194,7 +198,7 @@ def test_workflow_without_account_and_user_is_deleted():
 
 
 def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
-    desired = [PaperlessUser(5, "dave", True)]
+    desired = [member(5, "dave")]
     actual = state(
         accounts=(
             SambaAccount("alice", 20005, True),
@@ -241,7 +245,7 @@ def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
 
 
 def test_rename_detected_by_uid():
-    desired = [PaperlessUser(5, "dave", True)]
+    desired = [member(5, "dave")]
     plan = planned(desired, provisioned_state(username="alice"))
     assert plan.actions == (
         RenameUser(
@@ -274,7 +278,7 @@ def test_unmanaged_folder_warned_not_deleted():
 
 def test_account_with_another_stored_uid_gets_no_action():
     # user 5 held the name alice, and a stopped removal disabled the entry
-    desired = [PaperlessUser(9, "alice", True)]
+    desired = [member(9, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, False),),
         folders=(InboxFolder("alice", 20005),),
@@ -287,7 +291,7 @@ def test_account_with_another_stored_uid_gets_no_action():
 
 
 def test_inactive_user_with_another_stored_uid_has_the_login_disabled():
-    desired = [PaperlessUser(9, "alice", False)]
+    desired = [member(9, "alice", active=False)]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
@@ -297,7 +301,7 @@ def test_inactive_user_with_another_stored_uid_has_the_login_disabled():
 
 
 def test_invalid_rename_preserves_existing_resources():
-    desired = [PaperlessUser(5, "alice@example.com", True)]
+    desired = [member(5, "alice@example.com")]
     plan = planned(desired, provisioned_state())
     assert plan.actions == ()
     assert any("alice@example.com" in w for w in plan.warnings)
@@ -305,7 +309,7 @@ def test_invalid_rename_preserves_existing_resources():
 
 
 def test_user_named_like_another_unix_account_is_skipped():
-    desired = [PaperlessUser(5, "mail", True)]
+    desired = [member(5, "mail")]
     taken = state(accounts=(), folders=(), workflows=(), unix_uids={"mail": 8})
     plan = planned(desired, taken)
     assert plan.actions == ()
@@ -318,7 +322,7 @@ def test_user_named_like_another_unix_account_is_skipped():
 
 
 def test_rename_to_the_name_of_another_unix_account_changes_nothing():
-    desired = [PaperlessUser(5, "mail", True)]
+    desired = [member(5, "mail")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
@@ -337,14 +341,14 @@ def test_rename_to_the_name_of_another_unix_account_changes_nothing():
     ],
 )
 def test_skipped_inactive_user_has_the_entry_of_its_uid_disabled(username, unix_uids):
-    desired = [PaperlessUser(5, username, False)]
+    desired = [member(5, username, active=False)]
     actual = replace(provisioned_state(), unix_uids=unix_uids)
     assert planned(desired, actual).actions == (DisableAccount(username="alice"),)
 
 
 def test_skipped_inactive_user_has_each_entry_of_its_uid_disabled():
     # a rename from alice to dave that stopped before the old entry went
-    desired = [PaperlessUser(5, "Bad Name", False)]
+    desired = [member(5, "Bad Name", active=False)]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True), SambaAccount("dave", 20005, True)),
     )
@@ -356,7 +360,7 @@ def test_skipped_inactive_user_has_each_entry_of_its_uid_disabled():
 
 
 def test_rename_with_deactivation_disables_the_old_name_then_the_new_name():
-    desired = [PaperlessUser(5, "dave", False)]
+    desired = [member(5, "dave", active=False)]
     plan = planned(desired, provisioned_state(username="alice", enabled=True))
     assert plan.actions == (
         DisableAccount(username="alice"),
@@ -372,7 +376,7 @@ def test_rename_with_deactivation_disables_the_old_name_then_the_new_name():
 
 
 def test_stale_folder_with_desired_uid_frozen_with_warning():
-    desired = [PaperlessUser(5, "dave", True)]
+    desired = [member(5, "dave")]
     actual = state(
         accounts=(), folders=(InboxFolder("alice", 20005),), workflows=()
     )
@@ -401,7 +405,7 @@ def test_stored_uid_below_the_range_does_not_count():
 
 
 def test_entry_without_stored_uid_is_created_again():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", None, True),),
         folders=(InboxFolder("alice", 20005),),
@@ -422,7 +426,7 @@ def test_entry_without_stored_uid_and_without_user_is_left():
 
 
 def test_missing_unix_account_is_repaired_from_the_stored_uid():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
@@ -433,7 +437,7 @@ def test_missing_unix_account_is_repaired_from_the_stored_uid():
 
 
 def test_rename_with_reactivation_enables_the_old_name_then_the_new_name():
-    desired = [PaperlessUser(5, "dave", True)]
+    desired = [member(5, "dave")]
     plan = planned(desired, provisioned_state(username="alice", enabled=False))
     assert plan.actions == (
         EnableAccount(username="alice"),
@@ -453,7 +457,7 @@ ADMIN = TokenUser(1, True)
 
 def test_pending_document_goes_to_the_user_with_its_id_and_keeps_its_name():
     # uploaded for user 5 under the name alice, who is dave now, while user 9 took the name alice
-    desired = [PaperlessUser(5, "dave", True), PaperlessUser(9, "alice", True)]
+    desired = [member(5, "dave"), member(9, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20009, True), SambaAccount("dave", 20005, True)),
         folders=(InboxFolder("alice", 20009), InboxFolder("dave", 20005)),
@@ -468,7 +472,7 @@ def test_pending_document_goes_to_the_user_with_its_id_and_keeps_its_name():
 
 
 def test_rename_retitles_the_document_of_the_user():
-    desired = [PaperlessUser(5, "dave", True)]
+    desired = [member(5, "dave")]
     actual = replace(
         provisioned_state(),
         token_user=ADMIN,
@@ -481,7 +485,7 @@ def test_rename_retitles_the_document_of_the_user():
 
 
 def test_document_that_carries_the_name_of_its_owner_needs_no_action():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = replace(
         provisioned_state(),
         token_user=ADMIN,
@@ -533,7 +537,7 @@ def test_removal_takes_the_documents_of_that_account_only():
 
 def test_removal_of_an_old_name_leaves_the_documents_of_the_renamed_user():
     # a rename from alice to dave that stopped before the old entry went
-    desired = [PaperlessUser(5, "dave", True)]
+    desired = [member(5, "dave")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True), SambaAccount("dave", 20005, True)),
         folders=(InboxFolder("dave", 20005),),
@@ -555,7 +559,7 @@ def test_removal_of_an_old_name_leaves_the_documents_of_the_renamed_user():
 
 def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
     # the user of the token is in the sync group and leaves it
-    desired = [PaperlessUser(6, "bob", True)]
+    desired = [member(6, "bob")]
     actual = state(
         accounts=(SambaAccount("admin", 20001, True), SambaAccount("bob", 20006, True)),
         folders=(InboxFolder("bob", 20006),),
@@ -580,7 +584,7 @@ def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
 
 
 def test_pending_document_of_another_owner_is_left_with_a_warning():
-    desired = [PaperlessUser(5, "alice", True)]
+    desired = [member(5, "alice")]
     actual = replace(
         provisioned_state(),
         token_user=ADMIN,

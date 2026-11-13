@@ -186,11 +186,12 @@ def _document_action(
 
 
 def plan_cycle(
-    desired: list[PaperlessUser],
+    users: list[PaperlessUser],
     actual: ActualState,
     uid_base: int,
     consume_path: str,
 ) -> Plan:
+    desired = [u for u in users if u.member]
     actions: list[Action] = []
     warnings: list[str] = []
 

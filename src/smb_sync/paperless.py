@@ -1,6 +1,7 @@
 import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -51,6 +52,16 @@ def _unexpected_body(what: str) -> Generator[None, None, None]:
         yield
     except (ValueError, KeyError, TypeError) as exc:
         raise PaperlessError(f"{what} returned an unexpected body: {exc}") from exc
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _join_date(raw: str) -> int:
+    # cut to milliseconds and never rounded, as the export of paperless cuts a
+    # timestamp, so that an entry still fits its user after an export and import
+    delta = datetime.fromisoformat(raw) - _EPOCH
+    return (delta.days * 86400 + delta.seconds) * 1000 + delta.microseconds // 1000
 
 
 def _workflow_payload(user_id: int, username: str, consume_path: str) -> dict[str, Any]:
@@ -191,7 +202,7 @@ class PaperlessClient:
     def _trash_document(self, document_id: int) -> None:
         self._send("DELETE", f"/api/documents/{document_id}/", tolerate=(404,))
 
-    def fetch_desired_users(self, group_name: str) -> list[PaperlessUser]:
+    def fetch_users(self, group_name: str) -> list[PaperlessUser]:
         groups = self._get_all("/api/groups/", {"name__iexact": group_name})
         # the server filter ignores case, so "SMB" comes back for "smb"
         group_id = next((g["id"] for g in groups if g["name"] == group_name), None)
@@ -200,16 +211,17 @@ class PaperlessClient:
         path = "/api/users/"
         users = self._get_all(path)
         with _unexpected_body(path):
-            members = [
+            paperless_users = [
                 PaperlessUser(
                     id=u["id"],
                     username=u["username"],
                     is_active=u["is_active"],
+                    joined=_join_date(u["date_joined"]),
+                    member=group_id in u["groups"],
                 )
                 for u in users
-                if group_id in u["groups"]
             ]
-        return members
+        return paperless_users
 
     def fetch_managed_workflows(self) -> list[ManagedWorkflow]:
         path = "/api/workflows/"

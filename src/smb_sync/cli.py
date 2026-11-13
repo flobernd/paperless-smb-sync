@@ -48,8 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def format_status(
-    desired: list[PaperlessUser], actual: ActualState, plan: Plan, uid_base: int
+    users: list[PaperlessUser], actual: ActualState, plan: Plan, uid_base: int
 ) -> str:
+    desired = [u for u in users if u.member]
     # the planner ignores an entry that does not count, so its user reads as
     # missing
     accounts = {a.username: a for a in counted_accounts(actual.accounts, uid_base)}
@@ -207,11 +208,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if run_cycle_locked(cfg, api, system) else 1
     if args.command == "status":
         try:
-            desired, actual = observe(cfg, api, system)
+            users, actual = observe(cfg, api, system)
         except (CommandError, OSError, PaperlessError) as exc:
             print(f"smb-sync: {exc}", file=sys.stderr)
             return 1
-        plan = plan_cycle(desired, actual, cfg.uid_base, cfg.consume_path)
-        print(format_status(desired, actual, plan, cfg.uid_base))
+        plan = plan_cycle(users, actual, cfg.uid_base, cfg.consume_path)
+        print(format_status(users, actual, plan, cfg.uid_base))
         return 0
     return regen_password(cfg, system, args.username, api)

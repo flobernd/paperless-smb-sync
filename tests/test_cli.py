@@ -48,8 +48,12 @@ class FakeSystem:
 CONSUME = "/usr/src/paperless/consume"
 
 
+def member(user_id, username, active=True):
+    return PaperlessUser(user_id, username, active, 1731405600123, True)
+
+
 def test_format_status_table():
-    desired = [PaperlessUser(5, "alice", True), PaperlessUser(6, "bob", False)]
+    desired = [member(5, "alice"), member(6, "bob", active=False)]
     actual = ActualState(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
@@ -73,9 +77,9 @@ def test_format_status_table():
 
 def test_status_labels_follow_the_plan():
     desired = [
-        PaperlessUser(5, "dave", True),
-        PaperlessUser(6, "Bad Name", True),
-        PaperlessUser(7, "carol", True),
+        member(5, "dave"),
+        member(6, "Bad Name"),
+        member(7, "carol"),
     ]
     actual = ActualState(
         accounts=(
@@ -158,7 +162,7 @@ def test_main_regen_unknown_account(monkeypatch, capsys):
 
 def test_main_status_reports_an_api_failure_in_one_line(monkeypatch, capsys):
     class DownApi:
-        def fetch_desired_users(self, group_name):
+        def fetch_users(self, group_name):
             raise PaperlessError("api down")
 
     monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)

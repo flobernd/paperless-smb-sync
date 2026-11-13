@@ -64,23 +64,42 @@ def make_client(routes, writes=None):
     return PaperlessClient(BASE, "tok", CONSUME, session=session), session
 
 
-def test_fetch_desired_users_filters_by_group():
+def test_each_user_carries_the_member_flag_and_the_join_date():
     client, _ = make_client(
         {
             f"{BASE}/api/groups/": page([{"id": 3, "name": "smb"}]),
             f"{BASE}/api/users/": page(
                 [
-                    {"id": 5, "username": "alice", "is_active": True, "groups": [3]},
-                    {"id": 6, "username": "bob", "is_active": False, "groups": [3, 4]},
-                    {"id": 7, "username": "carol", "is_active": True, "groups": []},
+                    {
+                        "id": 5,
+                        "username": "alice",
+                        "is_active": True,
+                        "groups": [3],
+                        "date_joined": "2024-11-12T10:00:00.123999Z",
+                    },
+                    # paperless prints the offset of its time zone setting
+                    {
+                        "id": 6,
+                        "username": "bob",
+                        "is_active": False,
+                        "groups": [3, 4],
+                        "date_joined": "2024-11-12T11:00:00.123999+01:00",
+                    },
+                    {
+                        "id": 7,
+                        "username": "carol",
+                        "is_active": True,
+                        "groups": [],
+                        "date_joined": "2024-11-12T10:00:00Z",
+                    },
                 ]
             ),
         }
     )
-    users = client.fetch_desired_users("smb")
-    assert users == [
-        PaperlessUser(5, "alice", True),
-        PaperlessUser(6, "bob", False),
+    assert client.fetch_users("smb") == [
+        PaperlessUser(5, "alice", True, 1731405600123, True),
+        PaperlessUser(6, "bob", False, 1731405600123, True),
+        PaperlessUser(7, "carol", True, 1731405600000, False),
     ]
 
 
@@ -92,18 +111,26 @@ def test_pagination_followed():
             ),
             f"{BASE}/api/groups/?page=2": page([{"id": 3, "name": "smb"}]),
             f"{BASE}/api/users/": page(
-                [{"id": 5, "username": "alice", "is_active": True, "groups": [3]}]
+                [
+                    {
+                        "id": 5,
+                        "username": "alice",
+                        "is_active": True,
+                        "groups": [3],
+                        "date_joined": "2024-11-12T10:00:00Z",
+                    }
+                ]
             ),
         }
     )
-    users = client.fetch_desired_users("smb")
+    users = client.fetch_users("smb")
     assert len(users) == 1
 
 
 def test_missing_group_raises():
     client, _ = make_client({f"{BASE}/api/groups/": page([])})
     with pytest.raises(PaperlessError, match="does not exist"):
-        client.fetch_desired_users("smb")
+        client.fetch_users("smb")
 
 
 def test_http_error_raises_paperless_error():
@@ -116,14 +143,14 @@ def test_http_error_raises_paperless_error():
         }
     )
     with pytest.raises(PaperlessError):
-        client.fetch_desired_users("smb")
+        client.fetch_users("smb")
 
 
 def test_group_name_is_compared_exactly():
     # the server filter ignores case, so the client must not trust it
     client, _ = make_client({f"{BASE}/api/groups/": page([{"id": 3, "name": "SMB"}])})
     with pytest.raises(PaperlessError, match="does not exist"):
-        client.fetch_desired_users("smb")
+        client.fetch_users("smb")
 
 
 def test_record_without_groups_raises_paperless_error():
@@ -131,24 +158,31 @@ def test_record_without_groups_raises_paperless_error():
         {
             f"{BASE}/api/groups/": page([{"id": 3, "name": "smb"}]),
             f"{BASE}/api/users/": page(
-                [{"id": 5, "username": "alice", "is_active": True}]
+                [
+                    {
+                        "id": 5,
+                        "username": "alice",
+                        "is_active": True,
+                        "date_joined": "2024-11-12T10:00:00Z",
+                    }
+                ]
             ),
         }
     )
     with pytest.raises(PaperlessError, match="unexpected body"):
-        client.fetch_desired_users("smb")
+        client.fetch_users("smb")
 
 
 def test_non_json_body_raises_paperless_error():
     client, _ = make_client({f"{BASE}/api/groups/": BrokenJsonResponse()})
     with pytest.raises(PaperlessError, match="unexpected body"):
-        client.fetch_desired_users("smb")
+        client.fetch_users("smb")
 
 
 def test_missing_results_key_raises_paperless_error():
     client, _ = make_client({f"{BASE}/api/groups/": FakeResponse({"next": None})})
     with pytest.raises(PaperlessError, match="unexpected body"):
-        client.fetch_desired_users("smb")
+        client.fetch_users("smb")
 
 
 def test_fetch_managed_workflows_filters_prefix():

@@ -107,8 +107,12 @@ def run(actions, system=None, api=None):
     return failures, system, api
 
 
+def member(user_id, username, active=True):
+    return PaperlessUser(user_id, username, active, 1731405600123, True)
+
+
 def test_create_account_sets_password_and_prints_once(capsys):
-    user = PaperlessUser(5, "alice", True)
+    user = member(5, "alice")
     failures, system, _ = run([CreateAccount(user=user, uid=20005, upload=False)])
     assert failures == 0
     assert system.calls[0] == ("create_unix_user", "alice", 20005)
@@ -122,7 +126,7 @@ def test_create_account_sets_password_and_prints_once(capsys):
 
 
 def test_a_creation_whose_uid_write_fails_hands_out_no_password(capsys):
-    user = PaperlessUser(5, "alice", True)
+    user = member(5, "alice")
     failures, system, api = run(
         [CreateAccount(user=user, uid=20005, upload=True)],
         system=FakeSystem(fail_on="store_uid"),
@@ -348,7 +352,7 @@ def test_a_failed_command_or_request_logs_one_line_without_a_traceback(error, ca
 
 
 def test_a_failed_upload_does_not_fail_the_creation(caplog):
-    user = PaperlessUser(5, "alice", True)
+    user = member(5, "alice")
     with caplog.at_level(logging.ERROR):
         failures, system, _ = run(
             [CreateAccount(user=user, uid=20005, upload=True)],
@@ -361,7 +365,7 @@ def test_a_failed_upload_does_not_fail_the_creation(caplog):
 
 def test_the_uploaded_block_drops_the_lines_for_the_log(capsys):
     api = FakeApi()
-    user = PaperlessUser(5, "alice", True)
+    user = member(5, "alice")
     run([CreateAccount(user=user, uid=20005, upload=True)], api=api)
     (block,) = api.blocks
     assert "Username: alice" in block

@@ -7,6 +7,8 @@ class PaperlessUser:
     id: int
     username: str
     is_active: bool
+    joined: int
+    member: bool
 
 
 @dataclass(frozen=True)

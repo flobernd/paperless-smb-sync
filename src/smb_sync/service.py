@@ -58,7 +58,7 @@ def _observe_documents(
 def observe(
     cfg: Config, api: PaperlessClient, system: SystemAdapter
 ) -> tuple[list[PaperlessUser], ActualState]:
-    desired = api.fetch_desired_users(cfg.sync_group)
+    users = api.fetch_users(cfg.sync_group)
     workflows = api.fetch_managed_workflows()
     token_user, documents = (
         _observe_documents(api) if cfg.credentials_document else (None, ())
@@ -71,7 +71,7 @@ def observe(
         documents=documents,
         token_user=token_user,
     )
-    return desired, actual
+    return users, actual
 
 
 def run_cycle(
@@ -81,7 +81,7 @@ def run_cycle(
     repeat: WarningRepeat | None = None,
 ) -> bool:
     try:
-        desired, actual = observe(cfg, api, system)
+        users, actual = observe(cfg, api, system)
     except PaperlessError as exc:
         # an unreachable API must never look like "no users"
         log.error("paperless API unavailable, skipping cycle: %s", exc)
@@ -90,7 +90,7 @@ def run_cycle(
         log.error("failed to read local state, skipping cycle: %s", exc)
         return False
 
-    result = plan_cycle(desired, actual, cfg.uid_base, cfg.consume_path)
+    result = plan_cycle(users, actual, cfg.uid_base, cfg.consume_path)
     warnings = result.warnings if repeat is None else repeat.due(result.warnings)
     for warning in warnings:
         log.warning("%s", warning)

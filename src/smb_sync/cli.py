@@ -234,4 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         plan = plan_cycle(users, actual, cfg.uid_base, cfg.paperless_gid)
         print(format_status(users, actual, plan, cfg.uid_base))
         return 0
-    return regen_password(cfg, system, args.login_name, api, DEFAULT_LOCK_PATH)
+    try:
+        return regen_password(cfg, system, args.login_name, api, DEFAULT_LOCK_PATH)
+    except CommandError as exc:
+        print(f"smb-sync: {exc}", file=sys.stderr)
+        return 1

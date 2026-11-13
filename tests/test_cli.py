@@ -18,6 +18,7 @@ from smb_sync.model import (
 )
 from smb_sync.paperless import PaperlessError
 from smb_sync.planner import plan_cycle
+from smb_sync.system import CommandError
 
 # defined locally because pytest does not import test modules as a package
 CFG = Config(
@@ -212,6 +213,24 @@ def test_main_regen_unknown_account(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr("smb_sync.cli.DEFAULT_LOCK_PATH", str(tmp_path / "lock"))
     assert main(["regen", "ghost"]) == 1
     assert "ghost" in capsys.readouterr().err
+
+
+def test_main_regen_reports_a_failed_command_in_one_line(monkeypatch, tmp_path, capsys):
+    class BrokenSystem(FakeSystem):
+        def read_usermap(self):
+            raise CommandError("cannot read the username map")
+
+    monkeypatch.setattr("smb_sync.cli.load_config", lambda: CFG)
+    monkeypatch.setattr(
+        "smb_sync.cli.PaperlessClient", lambda url, token, consume: object()
+    )
+    monkeypatch.setattr(
+        "smb_sync.cli.SystemAdapter", lambda root, gid: BrokenSystem(accounts=[])
+    )
+    monkeypatch.setattr("smb_sync.cli.DEFAULT_LOCK_PATH", str(tmp_path / "lock"))
+    assert main(["regen", "alice"]) == 1
+    err = capsys.readouterr().err
+    assert "smb-sync: cannot read the username map" in err.splitlines()
 
 
 def test_main_status_reports_an_api_failure_in_one_line(monkeypatch, capsys):

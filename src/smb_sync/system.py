@@ -273,8 +273,14 @@ class SystemAdapter:
         path = self._inbox / username
         with _command_error(f"cannot create inbox folder '{path}'"):
             path.mkdir(exist_ok=True)
-            os.chown(path, uid, self._gid)
-            path.chmod(_FOLDER_MODE)
+            # The daemon runs as root, so it must not follow a link in the
+            # inbox root to a folder outside the inbox.
+            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.chown(fd, uid, self._gid)
+                os.chmod(fd, _FOLDER_MODE)
+            finally:
+                os.close(fd)
 
     def repair_inbox_folder(self, account: str, uid: int) -> None:
         path = self._inbox / account

@@ -145,6 +145,20 @@ def test_disable_and_enable_send_their_own_flag(tmp_path):
     ]
 
 
+def test_a_folder_creation_follows_no_link_under_the_account_name(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside.chmod(0o755)
+    (inbox / "u20005").symlink_to(outside)
+    # the ids of the test user, so a creation that follows the link changes the target without root
+    adapter = SystemAdapter(str(inbox), os.getgid())
+    with pytest.raises(CommandError, match="cannot create inbox folder"):
+        adapter.create_inbox_folder("u20005", os.getuid())
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o755
+
+
 def test_delete_inbox_folder_removes_contents(tmp_path):
     (tmp_path / "alice").mkdir()
     (tmp_path / "alice" / "scan.pdf").write_text("data")

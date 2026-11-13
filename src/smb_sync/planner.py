@@ -47,8 +47,8 @@ _PAPERLESS_USERNAME = re.compile(r"[\w.@+-]+")
 def counted_accounts(
     accounts: Iterable[SambaAccount], uid_base: int
 ) -> tuple[ManagedAccount, ...]:
-    # A creation stores the mark right after the password, so an entry without
-    # one is either unfinished or not the daemon's. The daemon names each
+    # A creation stores the mark as its last step on the entry, so an entry
+    # without one is either unfinished or not the daemon's. The daemon names each
     # account after its uid, so an entry that carries a mark under another name
     # is not one that it made.
     counted: list[ManagedAccount] = []

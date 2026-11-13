@@ -115,6 +115,17 @@ def test_a_creation_whose_mark_write_fails_hands_out_no_password():
     assert api.calls == []
 
 
+def test_a_creation_whose_disable_fails_leaves_an_entry_without_the_mark():
+    failures, system, api = run(
+        [CreateAccount(user=member(5, "alice"), uid=20005, upload=True)],
+        system=FakeSystem(fail_on="disable_samba_account"),
+    )
+    assert failures == 1
+    # the password is the last step that ran
+    assert system.calls[-1][0] == "set_samba_password"
+    assert api.calls == []
+
+
 def test_folder_workflow_and_state_actions():
     failures, system, api = run(
         [
@@ -302,7 +313,6 @@ def test_a_failed_upload_does_not_fail_the_creation(caplog, capsys):
             api=FakeApi(fail_upload=True),
         )
     assert failures == 0
-    assert system.calls[-1] == ("disable_samba_account", "u20005")
     assert "upload refused" in caplog.text
     _, _, password, _ = system.calls[1]
     assert password not in caplog.text + capsys.readouterr().out

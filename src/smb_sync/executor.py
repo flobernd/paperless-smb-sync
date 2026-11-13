@@ -122,12 +122,13 @@ def _apply(
             system.create_unix_user(account, uid)
             password = generate_password()
             system.set_samba_password(account, password, create=True)
+            # smbpasswd -a makes the entry with an open login. The disable
+            # comes before the mark, so a failed disable leaves an entry
+            # without the mark, which the next cycle makes again.
+            system.disable_samba_account(account)
             # An entry without the mark is one that the daemon does not
             # manage, so no person gets a password for it.
             system.store_mark(account, uid, user.joined)
-            # smbpasswd -a creates the entry enabled. A later cycle enables it
-            # once the workflow of the account exists.
-            system.disable_samba_account(account)
             log.info(
                 "provisioned samba account '%s' (uid %d) for the login name '%s'. "
                 "Run 'smb-sync regen %s' to set a new password and show it.",

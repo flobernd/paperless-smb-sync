@@ -272,6 +272,18 @@ def test_an_entry_with_another_join_date_gets_a_closed_login_and_nothing_else():
     assert any("u20005" in w for w in plan.warnings)
 
 
+def test_an_entry_of_a_user_outside_the_group_with_another_join_date_is_foreign():
+    # user 6 is no member, and the entry u20006 was made for another person with that id
+    users = [member(5, "alice"), PaperlessUser(6, "bob", True, 1, False)]
+    actual = replace(
+        settled((5, "alice"), (6, "bob")),
+        map_lines=("!u20005 = alice", "!nobody = *"),
+    )
+    plan = planned(users, actual)
+    assert plan.actions == (DisableAccount(account="u20006"),)
+    assert any("u20006" in w for w in plan.warnings)
+
+
 def test_a_hold_deletes_nothing_and_closes_the_removal_candidate():
     # the entry of user 5 has another join date, and user 6 left the group
     users = [member(5, "alice", joined=1), former(6, "bob")]

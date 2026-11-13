@@ -397,7 +397,8 @@ jq -e '.count == 0' <<<"$SEEN" >/dev/null \
 echo "== asserting a settled state =="
 # the first cycle takes up what the daemon has not reached yet
 quiet_cycle
-SETTLED=$(cycle 2>&1) || fail "the sync command failed"
+quiet_cycle
+SETTLED=$LAST_CYCLE
 [ -z "$SETTLED" ] || fail "a cycle in a settled state did something: $SETTLED"
 
 echo "== asserting deprovisioning =="

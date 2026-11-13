@@ -221,6 +221,8 @@ def test_a_folder_repair_takes_the_setgid_bit_off_the_folder_while_it_walks(tmp_
     folder = tmp_path / "u20005"
     folder.mkdir()
     folder.chmod(0o2770)
+    # an environment that cannot hold the bit fails the test here, with that cause
+    assert folder.stat().st_mode & stat.S_ISGID
     (folder / "scan.pdf").write_text("scan")
     during = []
 

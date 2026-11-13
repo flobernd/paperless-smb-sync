@@ -168,7 +168,8 @@ paperless on, paperless can also put the text of a credentials document into its
 The `/var/lib/samba` volume holds Samba's own credential store `passdb.tdb`, the file `smb-sync-uid-base`, and the
 username map `smb-sync-usermap`, and must persist across restarts. Without it a recreation of the container loses each
 account. The daemon then makes no new account for a member while the inbox still holds a folder with the account name,
-and its warning asks to remove the folder.
+and its warning asks to remove the folder. The volume can start empty, as a new named volume or as a bind mount of an
+empty host directory.
 
 Each Samba entry that the daemon creates stores the uid and the join date of its user in its description field
 (`smb-sync uid=<uid> joined=<join date>`), and the daemon manages only an entry with that mark, a uid of `UID_BASE` or

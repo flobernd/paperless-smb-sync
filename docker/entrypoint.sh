@@ -52,6 +52,10 @@ case "$parse" in
         ;;
 esac
 
+# Samba keeps passdb here. A new named volume gets the directory from the
+# image, and an empty directory as the volume, such as a bind mount, does not.
+mkdir -p /var/lib/samba/private
+
 if ! smb-sync volume; then
     echo "samba volume check failed, refusing to start" >&2
     exit 1

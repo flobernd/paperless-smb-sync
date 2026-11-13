@@ -261,6 +261,18 @@ fi
 echo "== asserting that a container without a token stops =="
 refuses_to_start "no token" "PAPERLESS_API_TOKEN" -e PAPERLESS_URL=http://paperless:8000
 
+echo "== asserting that a container starts with an empty directory as the Samba volume =="
+# A tmpfs is empty like a bind mount of an empty directory, while a new named
+# volume gets the content of /var/lib/samba from the image.
+docker rm -f -v smb-sync-smoke-check >/dev/null 2>&1 || true
+docker run -d --name smb-sync-smoke-check -e PAPERLESS_URL=http://paperless:8000 \
+    -e PAPERLESS_API_TOKEN=unset --tmpfs /var/lib/samba "$SMOKE_IMAGE" >/dev/null \
+    || fail "could not start the container with an empty directory"
+wait_for "the map of a start on an empty directory lacks the line '!nobody = *'" \
+    docker exec smb-sync-smoke-check grep -sqxF -- '!nobody = *' /var/lib/samba/smb-sync-usermap
+docker exec smb-sync-smoke-check test -e /var/lib/samba/smb-sync-uid-base \
+    || fail "the start on an empty directory did not store the UID_BASE"
+
 echo "== asserting that a container with another UID_BASE stops =="
 docker rm -f -v smb-sync-smoke-check >/dev/null 2>&1 || true
 docker run -d --name smb-sync-smoke-check -e PAPERLESS_URL=http://paperless:8000 \

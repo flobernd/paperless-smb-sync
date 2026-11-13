@@ -320,6 +320,17 @@ def plan_cycle(
         # person a login name, and the map has to carry it by then.
         actions.append(WriteMap(lines=lines))
 
+    # Without the entry that waits, the volume would hold no known entry once
+    # the other removals pass, so a removal of an orphan that fails would
+    # start a hold that tries nothing again.
+    waiting: int | None = None
+    if (
+        not hold
+        and known_uids.isdisjoint(members)
+        and any(a.uid not in users_by_uid for a in counted)
+    ):
+        waiting = min(known_uids)
+
     held: set[int] = set()
     # A login closes again while its account still has a session, so the next
     # cycle ends a session that a failed stop left, or one that started while
@@ -351,7 +362,7 @@ def plan_cycle(
                 )
             )
             continue
-        if hold:
+        if hold or account.uid == waiting:
             if account.enabled or account.name in actual.session_accounts:
                 actions.append(DisableAccount(account=account.name))
             continue

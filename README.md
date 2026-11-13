@@ -202,6 +202,14 @@ empty volumes.
 An export and import with the tools of paperless is no such case. The user ids stay, and the join date counts
 milliseconds, which the export keeps.
 
+A third way out fits one case only: one entry alone belongs to another person, and the operator knows that its former
+user is gone, for example after paperless gave a user id out a second time. The operator removes that entry by hand with
+`docker exec <container> pdbedit -x -u <account name>`, and then removes the inbox folder of that name. The hold ends
+when the entry is gone, unless paperless knows none of the entries that are left. Until the folder is gone as well, the
+daemon warns that the folder keeps the member from getting an account, and after that it makes a new account for the
+member, who gets a new password. This way is wrong when several entries are foreign, because the daemon then points to
+another paperless database.
+
 After a move to a paperless with other users, the hold lasts until the operator empties the volumes by hand. When an
 administrator deletes the paperless user of the last entry that paperless knows, the daemon closes that login and keeps
 it closed, and it makes no account until the volumes are empty.
@@ -216,17 +224,18 @@ This protects against a temporary deactivation being mistaken for an offboarding
 
 Outside a hold (see Entries of another paperless database above), leaving `SYNC_GROUP` or being deleted in paperless
 counts as offboarding: the daemon deletes the user's Samba account, their `[smb-sync]` workflow, and their inbox folder,
-**including any files still sitting in it**. Make sure documents are consumed (or moved elsewhere) before removing
-someone from the group. To lose only the login and keep the data, deactivate the paperless user instead of removing them
-from the group.
+**including any files still sitting in it**. When each account that paperless still knows is due for removal and an
+account of a deleted user is also left, the daemon closes the login of one of the known accounts and removes it one
+cycle after the others. Make sure documents are consumed (or moved elsewhere) before removing someone from the group. To
+lose only the login and keep the data, deactivate the paperless user instead of removing them from the group.
 
 The daemon deletes an inbox folder only together with the Samba account of its user, and only when the owner of the
 folder is the uid that the entry stores. A folder with no account stays in place, with a warning. Each removal runs in
-the cycle that finds it, in this order: the login closes and the open sessions end, the workflow goes, then the
-credentials documents, which the daemon also empties from the trash along with each credentials document that has no
-owner, then the folder with its contents, then the unix account, and last the Samba entry. The workflow goes after the
-login closes, so a scan that arrives while the login is still open still gets that user as its owner. A failed step ends
-the removal, and the next cycle starts it again from the entry.
+this order: the login closes and the open sessions end, the workflow goes, then the credentials documents, which the
+daemon also empties from the trash along with each credentials document that has no owner, then the folder with its
+contents, then the unix account, and last the Samba entry. The workflow goes after the login closes, so a scan that
+arrives while the login is still open still gets that user as its owner. A failed step ends the removal, and the next
+cycle starts it again from the entry.
 
 ## Configuration
 

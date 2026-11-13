@@ -217,6 +217,48 @@ def test_each_removal_candidate_goes_in_the_cycle_that_finds_it():
     )
 
 
+def test_the_lowest_known_candidate_waits_while_an_orphan_is_left_and_no_member_has_an_entry():
+    # users 5 and 6 left the group, and paperless has no user 7 any more
+    users = [former(5, "alice"), former(6, "bob")]
+    actual = settled((5, "alice"), (6, "bob"), (7, "carol"))
+    assert planned(users, actual).actions == (
+        WriteMap(("!nobody = *",)),
+        DisableAccount(account="u20005"),
+        Deprovision(
+            account="u20006",
+            user_id=6,
+            login_name="bob",
+            workflow_id=106,
+            delete_folder=True,
+            documents=None,
+        ),
+        Deprovision(
+            account="u20007",
+            user_id=7,
+            login_name="carol",
+            workflow_id=107,
+            delete_folder=True,
+            documents=None,
+        ),
+    )
+
+
+def test_the_last_account_of_a_user_who_left_the_group_is_removed_while_no_orphan_is_left():
+    # user 5 left the group, and paperless still has a user for each entry
+    actual = settled((5, "alice"))
+    assert planned([former(5, "alice")], actual).actions == (
+        WriteMap(("!nobody = *",)),
+        Deprovision(
+            account="u20005",
+            user_id=5,
+            login_name="alice",
+            workflow_id=105,
+            delete_folder=True,
+            documents=None,
+        ),
+    )
+
+
 def test_a_workflow_of_no_account_is_deleted():
     # version 0.1.0 named its workflows after the usernames
     actual = replace(

@@ -327,11 +327,13 @@ wait_for "inbox folder of carol did not appear" \
     compose exec -T smb test -d "/shares/inbox/$CAROL"
 
 echo "== asserting the creation =="
+# The workflow is the last thing that the cycle of the creation makes, so
+# after this wait the folder also has its owner and its mode.
+wait_for "workflow of carol did not appear" has_workflow "$CAROL"
 FOLDER=$(compose exec -T smb stat -c '%a %u %g' "/shares/inbox/$CAROL") \
     || fail "could not read the inbox folder of carol"
 [ "$FOLDER" = "2770 ${CAROL#u} 10000" ] \
     || fail "the inbox folder of carol has the mode, owner and group $FOLDER"
-has_workflow "$CAROL" || fail "workflow of carol missing"
 CAROL_GROUPS=$(compose exec -T smb id -Gn "$CAROL") || fail "could not read the groups of carol"
 [ "$CAROL_GROUPS" = smb-sync ] || fail "the account of carol is in the groups $CAROL_GROUPS"
 

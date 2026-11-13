@@ -185,48 +185,66 @@ def test_missing_results_key_raises_paperless_error():
         client.fetch_users("smb")
 
 
-def test_fetch_managed_workflows_filters_prefix():
+def definition(**changes):
+    # the answer of paperless for the workflow that the daemon makes for user 5 under the name alice
+    trigger = {
+        "id": 11,
+        "type": 1,
+        "sources": [1],
+        "filter_path": "/data/consume/alice/*",
+        "filter_filename": None,
+    }
+    action = {
+        "id": 12,
+        "type": 1,
+        "assign_owner": 5,
+        "assign_view_users": [5],
+        "assign_change_users": [5],
+        "assign_view_groups": [],
+        "assign_change_groups": [],
+        # a field that the daemon does not set
+        "assign_tags": [3],
+    }
+    return {
+        "id": 7,
+        "name": "[smb-sync] alice",
+        "order": 0,
+        "enabled": True,
+        "triggers": [{**trigger, **changes.get("trigger", {})}, *changes.get("triggers", [])],
+        "actions": [{**action, **changes.get("action", {})}, *changes.get("actions", [])],
+    }
+
+
+def test_a_workflow_with_each_field_of_the_definition_is_defined_for_its_owner():
     client, _ = make_client(
         {
             f"{BASE}/api/workflows/": page(
-                [
-                    {
-                        "id": 7,
-                        "name": "[smb-sync] alice",
-                        "triggers": [{"filter_path": "*/alice/*"}],
-                    },
-                    {"id": 8, "name": "my manual workflow"},
-                ]
+                [definition(), {"id": 8, "name": "my manual workflow"}]
             )
         }
     )
-    assert client.fetch_managed_workflows() == [
-        ManagedWorkflow(7, "alice", "*/alice/*")
-    ]
+    assert client.fetch_managed_workflows() == [ManagedWorkflow(7, "alice", 5)]
 
 
-def test_workflow_without_exactly_one_trigger_reads_as_an_empty_filter():
-    client, _ = make_client(
-        {
-            f"{BASE}/api/workflows/": page(
-                [
-                    {"id": 7, "name": "[smb-sync] alice", "triggers": []},
-                    {
-                        "id": 8,
-                        "name": "[smb-sync] bob",
-                        "triggers": [
-                            {"filter_path": "/data/consume/bob/*"},
-                            {"filter_path": "*/bob/*"},
-                        ],
-                    },
-                ]
-            )
-        }
-    )
-    assert client.fetch_managed_workflows() == [
-        ManagedWorkflow(7, "alice", ""),
-        ManagedWorkflow(8, "bob", ""),
-    ]
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"triggers": [{"type": 1, "sources": [1], "filter_path": "*/alice/*"}]},
+        {"trigger": {"type": 2}},
+        {"trigger": {"sources": [1, 2]}},
+        {"trigger": {"filter_path": "*/alice/*"}},
+        {"actions": [{"type": 1, "assign_owner": 6}]},
+        {"action": {"type": 2}},
+        {"action": {"assign_owner": 6}},
+        {"action": {"assign_view_users": [5, 6]}},
+        {"action": {"assign_change_users": []}},
+        {"action": {"assign_view_groups": [3]}},
+        {"action": {"assign_change_groups": [3]}},
+    ],
+)
+def test_a_workflow_that_differs_in_one_field_is_no_definition(changes):
+    client, _ = make_client({f"{BASE}/api/workflows/": page([definition(**changes)])})
+    assert client.fetch_managed_workflows() == [ManagedWorkflow(7, "alice", None)]
 
 
 def test_create_workflow_payload():

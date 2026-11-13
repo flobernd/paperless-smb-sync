@@ -25,7 +25,6 @@ from .model import (
     SambaAccount,
     TokenUser,
     UpdateWorkflow,
-    workflow_filter,
 )
 
 NO_SUPERUSER_WARNING = (
@@ -93,12 +92,13 @@ def _missing_folder(
 def _missing_workflow(
     user: PaperlessUser,
     workflows_by_username: Mapping[str, ManagedWorkflow],
-    consume_path: str,
 ) -> list[Action]:
     workflow = workflows_by_username.get(user.username)
     if workflow is None:
         return [CreateWorkflow(user_id=user.id, username=user.username)]
-    if workflow.filter_path != workflow_filter(consume_path, user.username):
+    # a workflow that is the full definition for another user gives that user
+    # the scans of this one
+    if workflow.defined_for != user.id:
         return [
             UpdateWorkflow(
                 workflow_id=workflow.id, user_id=user.id, username=user.username
@@ -189,7 +189,6 @@ def plan_cycle(
     users: list[PaperlessUser],
     actual: ActualState,
     uid_base: int,
-    consume_path: str,
 ) -> Plan:
     desired = [u for u in users if u.member]
     actions: list[Action] = []
@@ -215,7 +214,7 @@ def plan_cycle(
             actions.extend(_skipped_state_change(user, uid_base + user.id, counted))
 
     folders_by_name = {f.name: f for f in actual.folders}
-    workflows_by_username = {w.username: w for w in actual.workflows}
+    workflows_by_username = {w.name: w for w in actual.workflows}
     desired_names = {u.username for u in valid}
 
     delivery = actual.token_user
@@ -272,7 +271,7 @@ def plan_cycle(
                 CreateAccount(user=user, uid=uid, upload=delivery is not None)
             )
             actions.extend(_missing_folder(user, uid, folders_by_name))
-            actions.extend(_missing_workflow(user, workflows_by_username, consume_path))
+            actions.extend(_missing_workflow(user, workflows_by_username))
             # smbpasswd -a creates the account enabled
             actions.extend(_state_change(user.username, True, user.is_active))
             continue
@@ -303,7 +302,7 @@ def plan_cycle(
             continue
         actions.extend(_state_change(user.username, account.enabled, user.is_active))
         actions.extend(_missing_folder(user, uid, folders_by_name))
-        actions.extend(_missing_workflow(user, workflows_by_username, consume_path))
+        actions.extend(_missing_workflow(user, workflows_by_username))
 
     claimed_names = desired_names | renamed_from
     protected_names = {a.username for a in counted if a.uid in invalid_uids}
@@ -397,9 +396,9 @@ def plan_cycle(
     # still gets that user as its owner.
     for workflow in actual.workflows:
         if (
-            workflow.username not in claimed_names
-            and workflow.username not in stale_accounts
-            and workflow.username not in protected_names
+            workflow.name not in claimed_names
+            and workflow.name not in stale_accounts
+            and workflow.name not in protected_names
         ):
             actions.append(DeleteWorkflow(workflow_id=workflow.id))
 

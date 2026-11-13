@@ -55,7 +55,7 @@ def format_status(
     # missing
     accounts = {a.username: a for a in counted_accounts(actual.accounts, uid_base)}
     folders = {f.name for f in actual.folders}
-    workflows = {w.username for w in actual.workflows}
+    workflows = {w.name for w in actual.workflows}
     desired_names = {u.username for u in desired}
     renamed_to = {
         a.old_username: a.new_username
@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         except (CommandError, OSError, PaperlessError) as exc:
             print(f"smb-sync: {exc}", file=sys.stderr)
             return 1
-        plan = plan_cycle(users, actual, cfg.uid_base, cfg.consume_path)
+        plan = plan_cycle(users, actual, cfg.uid_base)
         print(format_status(users, actual, plan, cfg.uid_base))
         return 0
     return regen_password(cfg, system, args.username, api)

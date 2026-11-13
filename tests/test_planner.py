@@ -27,19 +27,18 @@ from smb_sync.model import (
 from smb_sync.planner import plan_cycle
 
 UID_BASE = 20000
-CONSUME = "/usr/src/paperless/consume"
 
 
 def planned(desired, actual):
-    return plan_cycle(desired, actual, UID_BASE, CONSUME)
+    return plan_cycle(desired, actual, UID_BASE)
 
 
 def member(user_id, username, active=True):
     return PaperlessUser(user_id, username, active, 1731405600123, True)
 
 
-def workflow(workflow_id, username):
-    return ManagedWorkflow(workflow_id, username, f"{CONSUME}/{username}/*")
+def workflow(workflow_id, username, user_id):
+    return ManagedWorkflow(workflow_id, username, user_id)
 
 
 def empty_state():
@@ -61,7 +60,7 @@ def provisioned_state(username="alice", user_id=5, enabled=True, workflow_id=7):
     return state(
         accounts=(SambaAccount(username, UID_BASE + user_id, enabled),),
         folders=(InboxFolder(username, UID_BASE + user_id),),
-        workflows=(workflow(workflow_id, username),),
+        workflows=(workflow(workflow_id, username, user_id),),
         unix_uids={username: UID_BASE + user_id},
     )
 
@@ -72,16 +71,18 @@ def test_steady_state_no_actions():
     assert plan.actions == ()
 
 
-def test_workflow_with_another_filter_is_updated():
+def test_a_workflow_defined_for_another_user_is_updated():
+    # a person gave the workflow of alice to user 9, with the rights of user 9
     desired = [member(5, "alice")]
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
-        workflows=(ManagedWorkflow(7, "alice", "*/alice/*"),),
+        workflows=(ManagedWorkflow(7, "alice", 9),),
         unix_uids={"alice": 20005},
     )
-    plan = plan_cycle(desired, actual, UID_BASE, "/usr/src/paperless/consume")
-    assert plan.actions == (UpdateWorkflow(workflow_id=7, user_id=5, username="alice"),)
+    assert planned(desired, actual).actions == (
+        UpdateWorkflow(workflow_id=7, user_id=5, username="alice"),
+    )
 
 
 def test_inactive_user_disabled():
@@ -125,7 +126,7 @@ def test_existing_folder_wrong_uid_is_adopted():
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 1000),),
-        workflows=(workflow(7, "alice"),),
+        workflows=(workflow(7, "alice", 5),),
         unix_uids={"alice": 20005},
     )
     plan = planned(desired, actual)
@@ -174,7 +175,7 @@ def test_at_most_one_deprovision_per_cycle():
             SambaAccount("bob", 20006, True),
         ),
         folders=(InboxFolder("alice", 20005), InboxFolder("bob", 20006)),
-        workflows=(workflow(7, "alice"), workflow(8, "bob")),
+        workflows=(workflow(7, "alice", 9), workflow(8, "bob", 9)),
     )
     plan = planned([], actual)
     removals = [a for a in plan.actions if isinstance(a, Deprovision)]
@@ -193,7 +194,7 @@ def test_at_most_one_deprovision_per_cycle():
 
 
 def test_workflow_without_account_and_user_is_deleted():
-    actual = state(workflows=(workflow(8, "ghost"),))
+    actual = state(workflows=(workflow(8, "ghost", 9),))
     assert planned([], actual).actions == (DeleteWorkflow(workflow_id=8),)
 
 
@@ -326,7 +327,7 @@ def test_rename_to_the_name_of_another_unix_account_changes_nothing():
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
-        workflows=(workflow(7, "alice"),),
+        workflows=(workflow(7, "alice", 9),),
         unix_uids={"alice": 20005, "mail": 8},
     )
     plan = planned(desired, actual)
@@ -409,7 +410,7 @@ def test_entry_without_stored_uid_is_created_again():
     actual = state(
         accounts=(SambaAccount("alice", None, True),),
         folders=(InboxFolder("alice", 20005),),
-        workflows=(workflow(7, "alice"),),
+        workflows=(workflow(7, "alice", 5),),
         unix_uids={"alice": 20005},
     )
     plan = planned(desired, actual)
@@ -430,7 +431,7 @@ def test_missing_unix_account_is_repaired_from_the_stored_uid():
     actual = state(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
-        workflows=(workflow(7, "alice"),),
+        workflows=(workflow(7, "alice", 5),),
     )
     plan = planned(desired, actual)
     assert plan.actions == (RepairUnixAccount(username="alice", uid=20005),)
@@ -461,7 +462,7 @@ def test_pending_document_goes_to_the_user_with_its_id_and_keeps_its_name():
     actual = state(
         accounts=(SambaAccount("alice", 20009, True), SambaAccount("dave", 20005, True)),
         folders=(InboxFolder("alice", 20009), InboxFolder("dave", 20005)),
-        workflows=(workflow(8, "alice"), workflow(7, "dave")),
+        workflows=(workflow(8, "alice", 9), workflow(7, "dave", 5)),
         unix_uids={"alice": 20009, "dave": 20005},
         token_user=ADMIN,
         documents=(CredentialDocument(40, "alice", 1, recipient_id=5),),
@@ -541,7 +542,7 @@ def test_removal_of_an_old_name_leaves_the_documents_of_the_renamed_user():
     actual = state(
         accounts=(SambaAccount("alice", 20005, True), SambaAccount("dave", 20005, True)),
         folders=(InboxFolder("dave", 20005),),
-        workflows=(workflow(7, "dave"),),
+        workflows=(workflow(7, "dave", 5),),
         unix_uids={"dave": 20005},
         token_user=ADMIN,
         documents=(CredentialDocument(40, "dave", 5, recipient_id=None),),
@@ -563,7 +564,7 @@ def test_removal_of_the_token_user_leaves_the_uploads_for_other_users():
     actual = state(
         accounts=(SambaAccount("admin", 20001, True), SambaAccount("bob", 20006, True)),
         folders=(InboxFolder("bob", 20006),),
-        workflows=(workflow(8, "bob"),),
+        workflows=(workflow(8, "bob", 6),),
         unix_uids={"admin": 20001, "bob": 20006},
         token_user=ADMIN,
         documents=(

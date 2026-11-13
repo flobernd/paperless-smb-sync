@@ -87,13 +87,33 @@ def _workflow_payload(user_id: int, username: str, consume_path: str) -> dict[st
     }
 
 
-def _trigger_filter(workflow: dict[str, Any]) -> str:
-    # A workflow without exactly one trigger reads as no filter, so the planner
-    # sees a difference and the update puts back the one trigger of the daemon.
+def _defined_for(workflow: dict[str, Any], name: str, consume_path: str) -> int | None:
+    # Only the fields that the daemon sets are compared. The answer fills the
+    # other fields with ids and defaults of paperless, which no payload of the
+    # daemon matches, so comparing them would write the workflow back in each
+    # cycle.
     triggers = workflow["triggers"]
-    if len(triggers) != 1:
-        return ""
-    return triggers[0]["filter_path"] or ""
+    actions = workflow["actions"]
+    if not workflow["enabled"] or len(triggers) != 1 or len(actions) != 1:
+        return None
+    (trigger,) = triggers
+    (action,) = actions
+    owner = action["assign_owner"]
+    # paperless keeps the sources as text, and its answer can carry a source as
+    # a number or as text, so they are compared as text
+    sources = [str(source) for source in trigger["sources"]]
+    if (
+        trigger["type"] == _TRIGGER_CONSUMPTION
+        and sources == [str(_SOURCE_CONSUME_FOLDER)]
+        and trigger["filter_path"] == workflow_filter(consume_path, name)
+        and action["type"] == _ACTION_ASSIGNMENT
+        and action["assign_view_users"] == [owner]
+        and action["assign_change_users"] == [owner]
+        and action["assign_view_groups"] == []
+        and action["assign_change_groups"] == []
+    ):
+        return owner
+    return None
 
 
 def _credential_document(record: dict[str, Any]) -> CredentialDocument | None:
@@ -230,8 +250,8 @@ class PaperlessClient:
             managed = [
                 ManagedWorkflow(
                     id=w["id"],
-                    username=w["name"].removeprefix(WORKFLOW_PREFIX),
-                    filter_path=_trigger_filter(w),
+                    name=(name := w["name"].removeprefix(WORKFLOW_PREFIX)),
+                    defined_for=_defined_for(w, name, self._consume_path),
                 )
                 for w in workflows
                 if w["name"].startswith(WORKFLOW_PREFIX)

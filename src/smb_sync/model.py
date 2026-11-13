@@ -34,8 +34,8 @@ class InboxFolder:
 @dataclass(frozen=True)
 class ManagedWorkflow:
     id: int
-    username: str
-    filter_path: str
+    name: str
+    defined_for: int | None
 
 
 @dataclass(frozen=True)

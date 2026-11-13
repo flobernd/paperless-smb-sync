@@ -45,9 +45,6 @@ class FakeSystem:
         self.calls.append(("disable_samba_account", username))
 
 
-CONSUME = "/usr/src/paperless/consume"
-
-
 def member(user_id, username, active=True):
     return PaperlessUser(user_id, username, active, 1731405600123, True)
 
@@ -57,14 +54,12 @@ def test_format_status_table():
     actual = ActualState(
         accounts=(SambaAccount("alice", 20005, True),),
         folders=(InboxFolder("alice", 20005),),
-        workflows=(
-            ManagedWorkflow(7, "alice", "/usr/src/paperless/consume/alice/*"),
-        ),
+        workflows=(ManagedWorkflow(7, "alice", 5),),
         unix_uids={},
         documents=(),
         token_user=None,
     )
-    plan = plan_cycle(desired, actual, 20000, CONSUME)
+    plan = plan_cycle(desired, actual, 20000)
     output = format_status(desired, actual, plan, 20000)
     lines = output.splitlines()
     assert "USERNAME" in lines[0]
@@ -94,7 +89,7 @@ def test_status_labels_follow_the_plan():
         documents=(),
         token_user=None,
     )
-    plan = plan_cycle(desired, actual, 20000, CONSUME)
+    plan = plan_cycle(desired, actual, 20000)
     text = format_status(desired, actual, plan, 20000)
     rows = {line.split()[0]: line for line in text.splitlines() if line.strip()}
     assert "renaming to dave" in rows["alice"]

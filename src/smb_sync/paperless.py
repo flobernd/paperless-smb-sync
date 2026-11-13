@@ -87,13 +87,15 @@ def _workflow_payload(user_id: int, account: str, consume_path: str) -> dict[str
 
 
 def _defined_for(workflow: dict[str, Any], name: str, consume_path: str) -> int | None:
-    # The fields that the daemon sets are compared, and two that it does not
-    # set: the file name filter and the mail rule of the trigger. Each of the
-    # two decides whether the trigger matches a scan at all, and a scan that
-    # the trigger does not match is imported with no owner. The answer fills
-    # the other fields with ids and defaults of paperless, which no payload of
-    # the daemon matches, so comparing them would write the workflow back in
-    # each cycle.
+    # The comparison reads the fields of the payload apart from the name and
+    # the order, and four fields that the daemon does not set. The two group
+    # lists of the action must be empty, since a group there gets a right on
+    # each scan. The file name filter and the mail rule of the trigger must be
+    # empty, since each of them decides whether the trigger matches a scan at
+    # all, and a scan that the trigger does not match is imported with no
+    # owner. The answer fills the other fields with ids and defaults of
+    # paperless, which no payload of the daemon matches, so comparing them
+    # would write the workflow back in each cycle.
     triggers = workflow["triggers"]
     actions = workflow["actions"]
     if not workflow["enabled"] or len(triggers) != 1 or len(actions) != 1:

@@ -23,14 +23,8 @@ wait_for() {
 account_of() { echo "u$((20000 + $1))"; }
 cycle() { compose exec -T smb smb-sync sync; }
 # The output of a cycle that the script starts reaches no container log, so
-# a failed cycle shows its own output.
-quiet_cycle() {
-    local out
-    if ! out=$(cycle 2>&1); then
-        printf '%s\n' "$out" >&2
-        fail "the sync command failed"
-    fi
-}
+# cleanup prints the output of the last one when a run fails.
+quiet_cycle() { LAST_CYCLE=$(cycle 2>&1) || fail "the sync command failed"; }
 regen() { compose exec -T smb smb-sync regen "$1"; }
 password_in() { awk '/Password:/{print $NF}' <<<"$1"; }
 
@@ -146,11 +140,12 @@ no_session() {
     count=$(sessions_of "$1") || return
     [ "$count" = 0 ]
 }
-# holds a session open for two minutes in the background of the container
+# The session outlasts a whole wait_for, so within a wait only the stop of the
+# daemon can end it.
 open_session() {
     # shellcheck disable=SC2016 # the variables expand in the shell of the container
     compose exec -d -e SMBLOGIN="$1" -e SMBPASS="$2" smb sh -c \
-        '(echo ls; sleep 120) | smbclient //localhost/inbox -U "$SMBLOGIN%$SMBPASS" >/dev/null 2>&1'
+        '(echo ls; sleep 600) | smbclient //localhost/inbox -U "$SMBLOGIN%$SMBPASS" >/dev/null 2>&1'
 }
 entry_closed() {
     local entry
@@ -240,6 +235,10 @@ refuses_to_start() {
 
 cleanup() {
     local code=$?
+    if [ "$code" != 0 ] && [ -n "${LAST_CYCLE+set}" ]; then
+        echo "== the output of the last cycle that the script started ==" >&2
+        printf '%s\n' "$LAST_CYCLE" >&2
+    fi
     # the teardown below removes the container together with its log
     if [ "$code" != 0 ] && [ -n "$(compose ps -a -q smb 2>/dev/null)" ]; then
         echo "== the last lines of the log of the smb container ==" >&2
@@ -405,10 +404,12 @@ echo "== asserting deprovisioning =="
 api -X PATCH "$API/api/users/$USER_ID/" -d '{"groups":[]}' >/dev/null
 wait_for "samba account of carol not removed" lacks_account "$CAROL"
 # the entry goes last, so each other part is gone by now
-if compose exec -T smb getent passwd "$CAROL" >/dev/null; then
-    fail "unix account of carol not removed"
-fi
-if compose exec -T smb test -e "/shares/inbox/$CAROL"; then fail "folder of carol not removed"; fi
+# getent answers 2 for a name that it does not find, so an exec that fails
+# does not pass for a removed account
+code=0
+compose exec -T smb getent passwd "$CAROL" >/dev/null || code=$?
+[ "$code" = 2 ] || fail "unix account of carol not removed"
+compose exec -T smb test ! -e "/shares/inbox/$CAROL" || fail "folder of carol not removed"
 WORKFLOWS=$(api "$API/api/workflows/" | jq -r '.results[].name') || fail "could not list workflows"
 if grep -qxF "[smb-sync] $CAROL" <<<"$WORKFLOWS"; then fail "workflow of carol not removed"; fi
 grep -qxF "[smb-sync] $DAVE" <<<"$WORKFLOWS" || fail "the removal of carol took the workflow of dave"
@@ -558,6 +559,8 @@ ERIN=$(account_of "$ERIN_ID")
 quiet_cycle
 quiet_cycle
 has_account "$ERIN" || fail "samba account of erin did not appear"
+# so that a closed entry in the hold below is the work of the hold
+if entry_closed "$ERIN"; then fail "the login of erin did not open before the hold"; fi
 compose exec -T smb test -d "/shares/inbox/$ERIN" || fail "inbox folder of erin did not appear"
 DAVE_RECORD=$(api "$API/api/users/$DAVE_ID/") || fail "could not read the user dave"
 JOINED=$(jq -er .date_joined <<<"$DAVE_RECORD") || fail "dave has no join date"
@@ -582,9 +585,7 @@ api -X PATCH "$API/api/users/$DAVE_ID/" -d "$(jq -n --arg joined "$JOINED" '{dat
 quiet_cycle
 smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in after the hold"
 lacks_account "$ERIN" || fail "samba account of erin not removed after the hold"
-if compose exec -T smb test -e "/shares/inbox/$ERIN"; then
-    fail "folder of erin not removed after the hold"
-fi
+compose exec -T smb test ! -e "/shares/inbox/$ERIN" || fail "folder of erin not removed after the hold"
 
 echo "== asserting a login after a recreation without paperless =="
 compose stop paperless

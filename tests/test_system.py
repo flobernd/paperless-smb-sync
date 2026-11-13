@@ -338,3 +338,38 @@ def test_the_session_accounts_are_the_account_names_of_the_session_list(tmp_path
     status = session_list(("u20005", 4242), ("u20005", 4243), ("u20006", 1))
     adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
     assert adapter.list_session_accounts() == frozenset({"u20005", "u20006"})
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        # no key sessions
+        json.dumps({}),
+        # a username that is an array
+        session_list((["u20005"], 4242)),
+    ],
+)
+def test_a_session_list_that_cannot_be_read_fails_the_listing_with_a_command_error(output, tmp_path):
+    # the observation of a cycle catches a CommandError alone
+    adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): output})
+    with pytest.raises(CommandError, match="smbstatus"):
+        adapter.list_session_accounts()
+
+
+def test_a_broken_record_of_another_account_does_not_hold_back_the_stop(tmp_path):
+    mine = subprocess.Popen(["sleep", "60"])
+    try:
+        status = json.dumps(
+            {
+                "sessions": {
+                    "0": {"username": "u20005", "server_id": {"pid": str(mine.pid)}},
+                    "1": {"username": "u20006"},
+                }
+            }
+        )
+        adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
+        adapter.stop_sessions("u20005")
+        assert mine.wait(timeout=5) == -signal.SIGTERM
+    finally:
+        mine.kill()
+        mine.wait()

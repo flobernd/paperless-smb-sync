@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from .model import InboxFolder, SambaAccount, entry_mark
 
@@ -131,13 +132,18 @@ class SystemAdapter:
     def list_session_accounts(self) -> frozenset[str]:
         return frozenset(account for account, _ in self._read_sessions())
 
-    def _read_sessions(self) -> list[tuple[str, str]]:
+    def _read_sessions(self) -> list[tuple[str, Any]]:
         output = self._run(["smbstatus", "-b", "--json"])
         try:
-            return [
-                (session["username"], session["server_id"]["pid"])
-                for session in json.loads(output)["sessions"].values()
-            ]
+            sessions: list[tuple[str, Any]] = []
+            for record in json.loads(output)["sessions"].values():
+                username = record["username"]
+                # An array or an object as the username would fail the listing
+                # with an error that the cycle does not catch.
+                if not isinstance(username, str):
+                    raise TypeError(f"the username {username!r} is no string")
+                sessions.append((username, record))
+            return sessions
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise CommandError(
                 f"cannot read the session list of smbstatus: {exc!r}"
@@ -237,11 +243,15 @@ class SystemAdapter:
         # ends with it.
         sessions = self._read_sessions()
         try:
-            pids = [_process_id(pid) for name, pid in sessions if name == account]
-        except (TypeError, ValueError) as exc:
+            pids = [
+                _process_id(record["server_id"]["pid"])
+                for name, record in sessions
+                if name == account
+            ]
+        except (KeyError, TypeError, ValueError) as exc:
             raise CommandError(
-                f"smbstatus lists a session of '{account}' with a process id "
-                f"that the stop does not signal: {exc!r}"
+                f"cannot read the process id of a session of '{account}' "
+                f"from smbstatus: {exc!r}"
             ) from exc
         for pid in pids:
             with _command_error(

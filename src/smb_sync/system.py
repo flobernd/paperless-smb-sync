@@ -65,7 +65,8 @@ def _check_rename(lines: dict[str, str], old: str, new: str) -> None:
 
 
 def _run(argv: list[str], input_text: str | None = None) -> str:
-    result = subprocess.run(argv, input=input_text, capture_output=True, text=True)
+    with _command_error(f"cannot run {argv[0]}"):
+        result = subprocess.run(argv, input=input_text, capture_output=True, text=True)
     if result.returncode != 0:
         raise CommandError(
             f"{' '.join(argv)} failed (rc={result.returncode}): "

@@ -1,5 +1,7 @@
 import logging
 
+import pytest
+
 from smb_sync.executor import execute
 from smb_sync.model import (
     CreateAccount,
@@ -333,6 +335,16 @@ def test_unexpected_failure_logs_traceback(caplog):
     with caplog.at_level(logging.ERROR):
         run([DisableAccount(username="alice")], system=system)
     assert any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.parametrize("error", [CommandError, PaperlessError])
+def test_a_failed_command_or_request_logs_one_line_without_a_traceback(error, caplog):
+    system = FakeSystem(fail_on="disable_samba_account", fail_with=error)
+    with caplog.at_level(logging.ERROR):
+        failures, _, _ = run([DisableAccount(username="alice")], system=system)
+    assert failures == 1
+    (record,) = caplog.records
+    assert not record.exc_info
 
 
 def test_a_failed_upload_does_not_fail_the_creation(caplog):

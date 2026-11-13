@@ -76,6 +76,14 @@ def test_listing_reads_the_stored_uid_of_each_entry(tmp_path):
     ]
 
 
+def test_a_command_that_cannot_start_raises_a_command_error(tmp_path, monkeypatch):
+    # no directory of this PATH holds pdbedit, and the adapter keeps its own runner
+    monkeypatch.setenv("PATH", str(tmp_path))
+    adapter = SystemAdapter(str(tmp_path), 10000)
+    with pytest.raises(CommandError, match="pdbedit"):
+        adapter.list_samba_accounts()
+
+
 def test_list_inbox_folders(tmp_path):
     (tmp_path / "alice").mkdir()
     (tmp_path / "somefile.txt").write_text("not a folder")

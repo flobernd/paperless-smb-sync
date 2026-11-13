@@ -21,7 +21,7 @@ from .model import (
     UpdateWorkflow,
 )
 from .paperless import PaperlessClient, PaperlessError
-from .system import SystemAdapter
+from .system import CommandError, SystemAdapter
 
 log = logging.getLogger(__name__)
 
@@ -41,9 +41,15 @@ def execute(
             _apply(action, system, api, announce)
         except Exception as exc:
             failures += 1
-            # exc_info so unexpected failures in a service that deletes
-            # accounts and folders stay diagnosable from the logs
-            log.error("action %r failed: %s", action, exc, exc_info=True)
+            # A CommandError names its command and a PaperlessError its
+            # request, so one line shows the cause. Any other error needs its
+            # traceback to be found.
+            log.error(
+                "action %r failed: %s",
+                action,
+                exc,
+                exc_info=not isinstance(exc, (CommandError, PaperlessError)),
+            )
     return failures
 
 
@@ -148,7 +154,12 @@ def _apply(
             document_id=document_id, user_id=user_id, username=username
         ):
             api.hand_over_document(document_id, user_id, username)
-            log.info("handed credentials document %d to '%s'", document_id, username)
+            log.info(
+                "handed credentials document %d to user %d under the title for '%s'",
+                document_id,
+                user_id,
+                username,
+            )
         case RenameDocument(
             document_id=document_id, old_username=old, new_username=new
         ):

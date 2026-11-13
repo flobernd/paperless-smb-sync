@@ -66,8 +66,9 @@ def format_status(
 ) -> str:
     members = members_by_uid(users, uid_base)
     entries = {a.uid: a for a in counted_accounts(actual.accounts, uid_base)}
-    # the plan drops the line of an account that it removes, so the name of
-    # such an account comes from the map as the cycle read it
+    # The plan takes the line of an account without a member out of the map,
+    # before its removal and also in a hold, where nothing is removed. So the
+    # name of such an account comes from the map as the cycle read it.
     read_logins = map_logins(actual.map_lines)
     folders = {f.name for f in actual.folders}
     workflows = {w.name for w in actual.workflows}

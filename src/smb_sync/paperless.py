@@ -101,8 +101,8 @@ def _defined_for(workflow: dict[str, Any], name: str, consume_path: str) -> int 
     (trigger,) = triggers
     (action,) = actions
     owner = action["assign_owner"]
-    # paperless keeps the sources as text, and its answer can carry a source as
-    # a number or as text, so they are compared as text
+    # the API does not pin the type of a source, so the sources are compared
+    # as text
     sources = [str(source) for source in trigger["sources"]]
     if (
         trigger["type"] == _TRIGGER_CONSUMPTION
@@ -118,6 +118,15 @@ def _defined_for(workflow: dict[str, Any], name: str, consume_path: str) -> int 
     ):
         return owner
     return None
+
+
+def _managed_workflow(workflow: dict[str, Any], consume_path: str) -> ManagedWorkflow:
+    name = workflow["name"].removeprefix(WORKFLOW_PREFIX)
+    return ManagedWorkflow(
+        id=workflow["id"],
+        name=name,
+        defined_for=_defined_for(workflow, name, consume_path),
+    )
 
 
 def _credential_document(record: dict[str, Any]) -> CredentialDocument | None:
@@ -252,11 +261,7 @@ class PaperlessClient:
         workflows = self._get_all(path)
         with _unexpected_body(path):
             managed = [
-                ManagedWorkflow(
-                    id=w["id"],
-                    name=(name := w["name"].removeprefix(WORKFLOW_PREFIX)),
-                    defined_for=_defined_for(w, name, self._consume_path),
-                )
+                _managed_workflow(w, self._consume_path)
                 for w in workflows
                 if w["name"].startswith(WORKFLOW_PREFIX)
             ]

@@ -54,9 +54,8 @@ def execute(
         except Exception as exc:
             failures += 1
             map_failed = map_failed or isinstance(action, WriteMap)
-            # A CommandError names its command and a PaperlessError its
-            # request, so one line shows the cause. Any other error needs its
-            # traceback to be found.
+            # A CommandError and a PaperlessError name their cause, so one
+            # line shows it. Any other error needs its traceback to be found.
             log.error(
                 "action %r failed: %s",
                 action,
@@ -203,7 +202,7 @@ def _apply(
             log.info("disabled samba account '%s'", account)
         case EnableAccount(account=account):
             system.enable_samba_account(account)
-            log.info("re-enabled samba account '%s'", account)
+            log.info("enabled samba account '%s'", account)
         case DeleteDocument(document_id=document_id):
             api.delete_document(document_id)
             log.info("deleted credentials document %d", document_id)

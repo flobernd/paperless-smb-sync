@@ -195,9 +195,9 @@ def entry_mark(uid: int, joined: int) -> str:
 
 
 def login_key(name: str) -> tuple[str, ...]:
-    # Samba compares two names character by character and without case, and the
-    # casefold() form of a whole name can be equal for two names that differ in
-    # one place, such as ßs and sß.
+    # casefold() turns ß into two letters, so the casefold() forms of the whole
+    # names ßs and sß are equal. Samba compares two names character by
+    # character and without case, and it tells these two apart.
     return tuple(c.casefold() for c in name)
 
 

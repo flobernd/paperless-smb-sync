@@ -216,7 +216,6 @@ def _document_action(
     token_user: TokenUser,
     users_with_line: Mapping[int, PaperlessUser],
     member_ids: Container[int],
-    entry_user_ids: Container[int],
 ) -> Action | None:
     if document.owner_id is None:
         # every user can read a document whose owner was deleted
@@ -235,12 +234,7 @@ def _document_action(
                 user_id=user.id,
                 username=document.username,
             )
-        # the removal of a counted entry with the uid of the recipient takes
-        # the document
-        if (
-            document.recipient_id not in member_ids
-            and document.recipient_id not in entry_user_ids
-        ):
+        if document.recipient_id not in member_ids:
             return DeleteDocument(document_id=document.id)
         return None
     if document.recipient_id is None:
@@ -352,9 +346,10 @@ def plan_cycle(
                 actions.append(DisableAccount(account=account.name))
             continue
         user_id = account.user_id
-        # This plan takes the line of an account that it removes out of the
-        # map, so the login name of such an account comes from the map as the
-        # cycle read it.
+        # The plan takes the line of an account without a member out of the
+        # map, before its removal and also in a hold, where nothing is
+        # removed. So the login name of such an account comes from the map as
+        # the cycle read it.
         login_name = read_logins.get(account.name)
         documents = _removal_documents(user_id, login_name, actual.documents, delivery)
         held.update(documents or ())
@@ -436,7 +431,6 @@ def plan_cycle(
             if account_name(uid) in logins
         }
         member_ids = {user.id for user in members.values()}
-        entry_user_ids = {a.user_id for a in counted}
         for document in actual.documents:
             if document.id in held:
                 continue
@@ -451,9 +445,7 @@ def plan_cycle(
                     f"the owner of an upload can cause this."
                 )
                 continue
-            action = _document_action(
-                document, delivery, users_with_line, member_ids, entry_user_ids
-            )
+            action = _document_action(document, delivery, users_with_line, member_ids)
             if action is not None:
                 actions.append(action)
 

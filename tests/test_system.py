@@ -258,7 +258,9 @@ def test_a_session_stop_ends_the_sessions_of_that_account_only(tmp_path):
         adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
         adapter.stop_sessions("u20005")
         assert mine.wait(timeout=5) == -signal.SIGTERM
-        assert other.poll() is None
+        # a signal that reached the other session ends it within this time
+        with pytest.raises(subprocess.TimeoutExpired):
+            other.wait(timeout=0.5)
     finally:
         for process in (mine, other):
             process.kill()

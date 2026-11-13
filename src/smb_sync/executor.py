@@ -16,6 +16,7 @@ from .model import (
     HandOverDocument,
     PaperlessUser,
     RenameDocument,
+    RepairFolder,
     RepairUnixAccount,
     UpdateWorkflow,
     WriteMap,
@@ -149,6 +150,9 @@ def _apply(
         case CreateFolder(account=account, uid=uid):
             system.create_inbox_folder(account, uid)
             log.info("created inbox folder '%s'", account)
+        case RepairFolder(account=account, uid=uid):
+            system.repair_inbox_folder(account, uid)
+            log.info("repaired the owner and the group of inbox folder '%s'", account)
         case CreateWorkflow(user_id=user_id, account=account):
             api.create_workflow(user_id, account)
             log.info("created consumption workflow for '%s'", account)

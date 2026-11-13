@@ -38,6 +38,7 @@ class ManagedAccount:
 class InboxFolder:
     name: str
     uid: int
+    gid: int
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,12 @@ class RenameDocument:
 
 
 @dataclass(frozen=True)
+class RepairFolder:
+    account: str
+    uid: int
+
+
+@dataclass(frozen=True)
 class RepairUnixAccount:
     account: str
     uid: int
@@ -164,6 +171,7 @@ Action = (
     | EnableAccount
     | HandOverDocument
     | RenameDocument
+    | RepairFolder
     | RepairUnixAccount
     | UpdateWorkflow
     | WriteMap

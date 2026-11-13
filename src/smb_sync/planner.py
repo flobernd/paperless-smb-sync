@@ -21,6 +21,7 @@ from .model import (
     PaperlessUser,
     Plan,
     RenameDocument,
+    RepairFolder,
     RepairUnixAccount,
     SambaAccount,
     TokenUser,
@@ -138,6 +139,7 @@ def _member_actions(
     unix_uids: Container[str],
     folders: Mapping[str, InboxFolder],
     workflows: Mapping[str, ManagedWorkflow],
+    paperless_gid: int,
 ) -> list[Action]:
     actions: list[Action] = []
     if account.name not in unix_uids:
@@ -156,11 +158,15 @@ def _member_actions(
     )
     if account.enabled and not may_open:
         actions.append(DisableAccount(account=account.name))
-    # an existing folder is adopted rather than recreated. Correcting its owner
-    # uid also takes over a folder of that name that exists under another uid.
+    # an existing folder is adopted rather than recreated, and the repair of its
+    # owner also takes over a folder of that name under another uid. paperless
+    # enters a folder of mode 2770 through its group alone, so a folder that
+    # kept the group from before a change of PAPERLESS_GID is repaired too.
     folder = folders.get(account.name)
-    if folder is None or folder.uid != account.uid:
+    if folder is None:
         actions.append(CreateFolder(account=account.name, uid=account.uid))
+    elif folder.uid != account.uid or folder.gid != paperless_gid:
+        actions.append(RepairFolder(account=account.name, uid=account.uid))
     actions.extend(_workflow_action(user, account.name, workflows))
     if not account.enabled and may_open:
         actions.append(EnableAccount(account=account.name))
@@ -247,6 +253,7 @@ def plan_cycle(
     users: list[PaperlessUser],
     actual: ActualState,
     uid_base: int,
+    paperless_gid: int,
 ) -> Plan:
     actions: list[Action] = []
     warnings: list[str] = []
@@ -333,7 +340,9 @@ def plan_cycle(
             # a member without a line keeps the account, the folder and the
             # workflow, and only the login name is gone
             actions.extend(
-                _member_actions(user, account, actual.unix_uids, folders, workflows)
+                _member_actions(
+                    user, account, actual.unix_uids, folders, workflows, paperless_gid
+                )
             )
             continue
         if hold:

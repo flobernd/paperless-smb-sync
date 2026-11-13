@@ -81,14 +81,14 @@ def test_status_rows_follow_the_plan():
     ]
     actual = ActualState(
         accounts=(entry(5), entry(6), entry(8, enabled=False), entry(9)),
-        folders=(InboxFolder("u20005", 20005),),
+        folders=(InboxFolder("u20005", 20005, 10000),),
         workflows=(ManagedWorkflow(105, "u20005", 5),),
         unix_uids={},
         map_lines=("!u20005 = alice", "!u20009 = erin", "!nobody = *"),
         documents=(),
         token_user=None,
     )
-    plan = plan_cycle(users, actual, 20000)
+    plan = plan_cycle(users, actual, 20000, 10000)
     table = format_status(users, actual, plan, 20000).splitlines()[1:6]
     assert [re.split(r" {2,}", row) for row in table] == [
         ["alice", "u20005", "20005", "open", "yes", "yes"],
@@ -111,7 +111,7 @@ def test_status_of_a_hold_shows_the_login_of_an_entry_without_a_member():
         documents=(),
         token_user=None,
     )
-    plan = plan_cycle(users, actual, 20000)
+    plan = plan_cycle(users, actual, 20000, 10000)
     table = format_status(users, actual, plan, 20000).splitlines()[1:3]
     assert [re.split(r" {2,}", row) for row in table] == [
         ["anna", "u20001", "20001", "missing", "no", "no"],

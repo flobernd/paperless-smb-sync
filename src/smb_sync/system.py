@@ -34,6 +34,10 @@ def _command_error(what: str) -> Generator[None, None, None]:
         raise CommandError(f"{what}: {exc}") from exc
 
 
+def _raise_error(error: OSError) -> None:
+    raise error
+
+
 def _unix_user(username: str) -> pwd.struct_passwd | None:
     try:
         return pwd.getpwnam(username)
@@ -103,15 +107,17 @@ class SystemAdapter:
         return {entry.pw_name: entry.pw_uid for entry in pwd.getpwall()}
 
     def list_inbox_folders(self) -> list[InboxFolder]:
+        folders: list[InboxFolder] = []
         with (
             _command_error(f"cannot list inbox folders in '{self._inbox}'"),
             os.scandir(self._inbox) as entries,
         ):
-            folders = [
-                InboxFolder(name=entry.name, uid=entry.stat().st_uid)
-                for entry in entries
-                if entry.is_dir(follow_symlinks=False)
-            ]
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    stat = entry.stat()
+                    folders.append(
+                        InboxFolder(name=entry.name, uid=stat.st_uid, gid=stat.st_gid)
+                    )
         return folders
 
     def read_usermap(self) -> tuple[str, ...] | None:
@@ -228,6 +234,25 @@ class SystemAdapter:
         path = self._inbox / username
         with _command_error(f"cannot create inbox folder '{path}'"):
             path.mkdir(exist_ok=True)
+            os.chown(path, uid, self._gid)
+            path.chmod(0o2770)
+
+    def repair_inbox_folder(self, account: str, uid: int) -> None:
+        path = self._inbox / account
+        with _command_error(f"cannot repair inbox folder '{path}'"):
+            # A share user can swap a subfolder for a link between the listing
+            # and the change, and the daemon runs as root. fwalk opens each
+            # subfolder through the descriptor of its parent and enters no
+            # link, and each change names its file through the descriptor of
+            # the folder that listed it and follows no link. So no change
+            # reaches a file outside the inbox.
+            # The planner compares the folder alone, so the folder goes last,
+            # and a repair that stopped below it is planned again in the next
+            # cycle. For the same reason a subfolder that the walk cannot read
+            # ends the repair, where fwalk would pass over it by default.
+            for _, dirnames, filenames, dir_fd in os.fwalk(path, onerror=_raise_error):
+                for name in (*dirnames, *filenames):
+                    os.chown(name, -1, self._gid, dir_fd=dir_fd, follow_symlinks=False)
             os.chown(path, uid, self._gid)
             path.chmod(0o2770)
 

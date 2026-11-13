@@ -157,6 +157,51 @@ def test_delete_inbox_folder_missing_is_noop(tmp_path):
     adapter.delete_inbox_folder("alice")
 
 
+def test_a_folder_repair_sets_the_group_below_and_follows_no_link(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    folder = root / "inbox" / "u20005"
+    (folder / "2026").mkdir(parents=True)
+    (folder / "2026" / "scan.pdf").write_text("scan")
+    (root / "outside").mkdir()
+    (root / "outside" / "letter.pdf").write_text("letter")
+    (folder / "link").symlink_to(root / "outside")
+    changed = []
+
+    def chown(path, uid, gid, *, dir_fd=None, follow_symlinks=True):
+        # the object that the call changes: the target of a link when the call follows it
+        if dir_fd is not None:
+            # Linux names the folder of a descriptor under /proc
+            path = os.path.join(os.readlink(f"/proc/self/fd/{dir_fd}"), path)
+        target = os.path.realpath(path) if follow_symlinks else os.fspath(path)
+        changed.append((os.path.relpath(target, root), uid, gid))
+
+    monkeypatch.setattr(os, "chown", chown)
+    SystemAdapter(str(root / "inbox"), 10000).repair_inbox_folder("u20005", 20005)
+    assert sorted(changed) == [
+        ("inbox/u20005", 20005, 10000),
+        ("inbox/u20005/2026", -1, 10000),
+        ("inbox/u20005/2026/scan.pdf", -1, 10000),
+        ("inbox/u20005/link", -1, 10000),
+    ]
+
+
+def test_a_folder_repair_that_cannot_read_a_subfolder_leaves_the_folder_as_it_was(tmp_path, monkeypatch):
+    folder = tmp_path / "u20005"
+    (folder / "2026").mkdir(parents=True)
+    changed = []
+
+    def chown(path, uid, gid, *, dir_fd=None, follow_symlinks=True):
+        changed.append(os.path.basename(path))
+        if os.path.basename(path) == "2026":
+            # the walk finds no subfolder to read when it gets there
+            (folder / "2026").rmdir()
+
+    monkeypatch.setattr(os, "chown", chown)
+    with pytest.raises(CommandError):
+        SystemAdapter(str(tmp_path), 10000).repair_inbox_folder("u20005", 20005)
+    assert changed == ["2026"]
+
+
 def test_list_inbox_folders_missing_root_raises(tmp_path):
     adapter, _ = make_adapter(tmp_path / "missing")
     with pytest.raises(CommandError):

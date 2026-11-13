@@ -92,7 +92,7 @@ def run_cycle(
         log.error("failed to read local state, skipping cycle: %s", exc)
         return False
 
-    result = plan_cycle(users, actual, cfg.uid_base)
+    result = plan_cycle(users, actual, cfg.uid_base, cfg.paperless_gid)
     warnings = result.warnings if repeat is None else repeat.due(result.warnings)
     for warning in warnings:
         log.warning("%s", warning)

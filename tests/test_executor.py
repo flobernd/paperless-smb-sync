@@ -14,6 +14,7 @@ from smb_sync.model import (
     HandOverDocument,
     PaperlessUser,
     RenameDocument,
+    RepairFolder,
     RepairUnixAccount,
     UpdateWorkflow,
     WriteMap,
@@ -65,6 +66,9 @@ class FakeSystem:
 
     def delete_inbox_folder(self, username):
         self._record("delete_inbox_folder", username)
+
+    def repair_inbox_folder(self, account, uid):
+        self._record("repair_inbox_folder", account, uid)
 
 
 class FakeApi:
@@ -138,10 +142,12 @@ def test_folder_workflow_and_state_actions():
             DisableAccount(account="u20005"),
             EnableAccount(account="u20005"),
             DeleteWorkflow(workflow_id=7),
+            RepairFolder(account="u20005", uid=20005),
         ]
     )
     assert failures == 0
     assert ("create_inbox_folder", "u20005", 20005) in system.calls
+    assert ("repair_inbox_folder", "u20005", 20005) in system.calls
     assert ("disable_samba_account", "u20005") in system.calls
     assert ("enable_samba_account", "u20005") in system.calls
     assert ("create_workflow", 5, "u20005") in api.calls

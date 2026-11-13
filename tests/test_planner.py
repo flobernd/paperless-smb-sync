@@ -18,6 +18,7 @@ from smb_sync.model import (
     ManagedWorkflow,
     PaperlessUser,
     RenameDocument,
+    RepairFolder,
     RepairUnixAccount,
     SambaAccount,
     TokenUser,
@@ -27,12 +28,13 @@ from smb_sync.model import (
 from smb_sync.planner import plan_cycle
 
 UID_BASE = 20000
+GID = 10000
 JOINED = 1731405600123
 ADMIN = TokenUser(1, True)
 
 
 def planned(users, actual):
-    return plan_cycle(users, actual, UID_BASE)
+    return plan_cycle(users, actual, UID_BASE, GID)
 
 
 def member(user_id, username, active=True, joined=JOINED):
@@ -49,7 +51,7 @@ def entry(user_id, enabled=True, joined=JOINED):
 
 
 def folder(user_id):
-    return InboxFolder(f"u{UID_BASE + user_id}", UID_BASE + user_id)
+    return InboxFolder(f"u{UID_BASE + user_id}", UID_BASE + user_id, GID)
 
 
 def workflow(workflow_id, user_id):
@@ -151,10 +153,14 @@ def test_a_workflow_that_is_no_definition_for_its_member_is_written_back(defined
     )
 
 
-def test_a_folder_with_another_owner_is_taken_back():
-    actual = replace(settled((5, "alice")), folders=(InboxFolder("u20005", 1000),))
+@pytest.mark.parametrize(
+    "found",
+    [InboxFolder("u20005", 1000, 10000), InboxFolder("u20005", 20005, 100)],
+)
+def test_a_folder_with_another_owner_or_group_is_repaired(found):
+    actual = replace(settled((5, "alice")), folders=(found,))
     assert planned([member(5, "alice")], actual).actions == (
-        CreateFolder(account="u20005", uid=20005),
+        RepairFolder(account="u20005", uid=20005),
     )
 
 
@@ -170,7 +176,7 @@ def test_a_removal_keeps_a_folder_of_another_owner():
     users = [member(5, "alice"), former(6, "bob")]
     actual = replace(
         settled((5, "alice"), (6, "bob")),
-        folders=(folder(5), InboxFolder("u20006", 20009)),
+        folders=(folder(5), InboxFolder("u20006", 20009, GID)),
     )
     assert planned(users, actual).actions == (
         WriteMap(("!u20005 = alice", "!nobody = *")),
@@ -220,7 +226,7 @@ def test_a_workflow_of_no_account_is_deleted():
 
 
 def test_a_folder_of_no_account_is_left_with_a_warning():
-    plan = planned([], state(folders=(InboxFolder("archive", 65534),)))
+    plan = planned([], state(folders=(InboxFolder("archive", 65534, GID),)))
     assert plan.actions == ()
     assert any("archive" in w for w in plan.warnings)
 

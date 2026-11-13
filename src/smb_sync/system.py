@@ -135,19 +135,22 @@ class SystemAdapter:
     def _read_sessions(self) -> list[tuple[str, Any]]:
         output = self._run(["smbstatus", "-b", "--json"])
         try:
-            sessions: list[tuple[str, Any]] = []
-            for record in json.loads(output)["sessions"].values():
-                username = record["username"]
-                # An array or an object as the username would fail the listing
-                # with an error that the cycle does not catch.
-                if not isinstance(username, str):
-                    raise TypeError(f"the username {username!r} is no string")
-                sessions.append((username, record))
-            return sessions
+            records = json.loads(output)["sessions"].values()
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise CommandError(
                 f"cannot read the session list of smbstatus: {exc!r}"
             ) from exc
+        sessions: list[tuple[str, Any]] = []
+        for record in records:
+            username = record.get("username") if isinstance(record, dict) else None
+            # A record without a username that is a string names no account,
+            # so it is no session that the daemon can end, and it must not keep
+            # the sessions beside it from their stop. An array as the username
+            # would also fail the set of the listing with an error that the
+            # cycle does not catch.
+            if isinstance(username, str):
+                sessions.append((username, record))
+        return sessions
 
     def list_inbox_folders(self) -> list[InboxFolder]:
         folders: list[InboxFolder] = []

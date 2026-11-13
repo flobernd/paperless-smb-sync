@@ -261,6 +261,64 @@ def test_the_first_uid_of_the_range_counts():
     )
 
 
+def test_an_entry_with_another_join_date_gets_a_closed_login_and_nothing_else():
+    # the two join dates are one millisecond apart, and the entry has no folder, no workflow and no unix account
+    users = [member(5, "alice", joined=1731405600124)]
+    actual = state(
+        accounts=(entry(5, joined=1731405600123),),
+        map_lines=("!u20005 = alice", "!nobody = *"),
+    )
+    plan = planned(users, actual)
+    assert plan.actions == (WriteMap(("!nobody = *",)), DisableAccount(account="u20005"))
+    assert any("u20005" in w for w in plan.warnings)
+
+
+def test_a_hold_deletes_nothing_and_closes_the_removal_candidate():
+    # the entry of user 5 has another join date, and user 6 left the group
+    users = [member(5, "alice", joined=1), former(6, "bob")]
+    actual = replace(
+        settled((5, "alice"), (6, "bob")),
+        map_lines=("!nobody = *",),
+        workflows=(workflow(105, 5), workflow(106, 6), ManagedWorkflow(8, "ghost", None)),
+        token_user=ADMIN,
+        documents=(CredentialDocument(40, "erin", None, recipient_id=None),),
+    )
+    plan = planned(users, actual)
+    assert plan.actions == (DisableAccount(account="u20005"), DisableAccount(account="u20006"))
+    assert any("hold" in w for w in plan.warnings)
+
+
+def test_a_hold_creates_no_account_and_still_repairs():
+    # the entry of user 5 has another join date, user 7 lost the folder, and user 8 is new
+    users = [member(5, "alice", joined=1), member(7, "carol"), member(8, "dan")]
+    actual = replace(
+        settled((5, "alice"), (7, "carol")),
+        folders=(folder(5),),
+        map_lines=("!u20007 = carol", "!nobody = *"),
+    )
+    assert planned(users, actual).actions == (
+        DisableAccount(account="u20005"),
+        CreateFolder(account="u20007", uid=20007),
+    )
+
+
+def test_a_database_that_knows_no_entry_is_a_hold():
+    # paperless has other users than the Samba volume
+    plan = planned([member(1, "anna")], settled((5, "alice"), (6, "bob")))
+    assert plan.actions == (
+        WriteMap(("!nobody = *",)),
+        DisableAccount(account="u20005"),
+        DisableAccount(account="u20006"),
+    )
+    assert any("hold" in w for w in plan.warnings)
+
+
+def test_a_member_gets_no_account_while_a_folder_of_the_account_name_exists():
+    plan = planned([member(5, "alice")], state(folders=(folder(5),)))
+    assert plan.actions == ()
+    assert any("u20005" in w and "alice" in w for w in plan.warnings)
+
+
 def test_a_member_whose_name_cannot_be_a_login_keeps_the_account_and_gets_no_document_rename():
     actual = replace(
         settled((5, "alice")),

@@ -99,6 +99,26 @@ def test_status_rows_follow_the_plan():
     ]
 
 
+def test_status_of_a_hold_shows_the_login_of_an_entry_without_a_member():
+    # paperless knows none of the entries, so the removal of u20005 waits
+    users = [member(1, "anna")]
+    actual = ActualState(
+        accounts=(entry(5),),
+        folders=(),
+        workflows=(),
+        unix_uids={},
+        map_lines=("!u20005 = alice", "!nobody = *"),
+        documents=(),
+        token_user=None,
+    )
+    plan = plan_cycle(users, actual, 20000)
+    table = format_status(users, actual, plan, 20000).splitlines()[1:3]
+    assert [re.split(r" {2,}", row) for row in table] == [
+        ["anna", "u20001", "20001", "missing", "no", "no"],
+        ["alice", "u20005", "20005", "open", "no", "no"],
+    ]
+
+
 def test_regen_finds_the_account_through_the_map_without_case(tmp_path, capsys):
     system = FakeSystem(
         [entry(5), entry(9)], ("!u20005 = John.Doe", "!u20009 = anna", "!nobody = *")

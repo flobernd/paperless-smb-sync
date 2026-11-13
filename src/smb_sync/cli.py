@@ -79,7 +79,7 @@ def format_status(
             login = "pending removal"
         elif entry is None:
             login = "missing"
-        elif account not in plan.logins:
+        elif member is not None and account not in plan.logins:
             login = "no login name"
         elif entry.enabled:
             login = "open"

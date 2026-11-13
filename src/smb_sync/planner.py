@@ -243,22 +243,61 @@ def plan_cycle(
     actions: list[Action] = []
     warnings: list[str] = []
 
+    users_by_uid = {uid_base + u.id: u for u in users}
     members = {uid_base + u.id: u for u in users if u.member}
     counted = counted_accounts(actual.accounts, uid_base)
     counted_names = {a.name for a in counted}
     entry_uids = {a.uid for a in counted}
+    known_uids: set[int] = set()
+    foreign_uids: set[int] = set()
+    for account in counted:
+        user = users_by_uid.get(account.uid)
+        if user is None:
+            continue
+        if user.joined == account.joined:
+            known_uids.add(account.uid)
+        else:
+            foreign_uids.add(account.uid)
     folders = {f.name: f for f in actual.folders}
     workflows = {w.name: w for w in actual.workflows}
     read_logins = map_logins(actual.map_lines)
+
+    # A hold closes logins and never deletes, because a closed login opens
+    # again when the cause ends and a deleted folder cannot come back.
+    hold_cause: str | None = None
+    if foreign_uids:
+        hold_cause = "the Samba volume holds an entry of another paperless user"
+    elif counted and not known_uids:
+        hold_cause = "paperless knows none of the accounts on the Samba volume"
+    hold = hold_cause is not None
 
     delivery = actual.token_user
     if delivery is not None and not delivery.is_superuser:
         delivery = None
 
+    # The daemon makes the folder after the entry, so a folder under the name
+    # of an account without an entry is not one that it made for this member,
+    # and it can hold the files of an earlier user of the uid.
+    folder_stops = {
+        account_name(uid): user
+        for uid, user in members.items()
+        if uid not in entry_uids and account_name(uid) in folders
+    }
+    candidates = {
+        uid: user
+        for uid, user in members.items()
+        if uid in known_uids
+        or (
+            uid not in entry_uids
+            and not hold
+            and account_name(uid) not in folder_stops
+        )
+    }
+
     # The lines are in the order of the uids, which does not change with a
     # rename or with the order in which paperless lists the users, so a map
     # that is up to date compares equal.
-    logins, name_warnings = _login_names(members, read_logins)
+    logins, name_warnings = _login_names(candidates, read_logins)
     warnings.extend(name_warnings)
     lines = (
         *(map_line(account, login) for account, login in logins.items()),
@@ -271,6 +310,16 @@ def plan_cycle(
 
     held: set[int] = set()
     for account in counted:
+        if account.uid in foreign_uids:
+            if account.enabled:
+                actions.append(DisableAccount(account=account.name))
+            warnings.append(
+                f"samba entry '{account.name}' was made for another paperless user "
+                f"than the user {account.uid - uid_base} of this database. Its login "
+                f"is closed and nothing else changes. Point the daemon to the "
+                f"paperless database of this entry, or start with empty volumes."
+            )
+            continue
         user = members.get(account.uid)
         if user is not None:
             # a member without a line keeps the account, the folder and the
@@ -278,6 +327,10 @@ def plan_cycle(
             actions.extend(
                 _member_actions(user, account, actual.unix_uids, folders, workflows)
             )
+            continue
+        if hold:
+            if account.enabled:
+                actions.append(DisableAccount(account=account.name))
             continue
         user_id = account.uid - uid_base
         # This plan takes the line of an account that it removes out of the
@@ -317,6 +370,13 @@ def plan_cycle(
             actions.append(DisableAccount(account=account))
         created.add(account)
 
+    if hold_cause is not None:
+        warnings.append(
+            f"smb-sync is on hold: {hold_cause}. It creates no account and deletes "
+            f"nothing. Point the daemon to the paperless database of the entries, or "
+            f"start with empty volumes."
+        )
+
     for entry in actual.accounts:
         if entry.username not in counted_names and entry.username not in created:
             warnings.append(
@@ -327,7 +387,14 @@ def plan_cycle(
     for folder in actual.folders:
         # a folder alone does not prove that the daemon made it, so it goes
         # only together with its account
-        if folder.name not in counted_names:
+        stopped = folder_stops.get(folder.name)
+        if stopped is not None:
+            warnings.append(
+                f"user '{stopped.username}' gets no account: the folder "
+                f"'{folder.name}' exists in the inbox and no account of smb-sync has "
+                f"that name. Remove the folder."
+            )
+        elif folder.name not in counted_names:
             warnings.append(
                 f"folder '{folder.name}' (uid {folder.uid}) belongs to no account "
                 f"of smb-sync and was left untouched"
@@ -341,9 +408,10 @@ def plan_cycle(
     # removal of that entry, after the login closed, and a scan that arrives
     # while the login of a user who left the group is still open still gets
     # that user as its owner.
-    for workflow in actual.workflows:
-        if workflow.name not in counted_names and workflow.name not in created:
-            actions.append(DeleteWorkflow(workflow_id=workflow.id))
+    if not hold:
+        for workflow in actual.workflows:
+            if workflow.name not in counted_names and workflow.name not in created:
+                actions.append(DeleteWorkflow(workflow_id=workflow.id))
 
     if delivery is not None:
         users_with_line = {
@@ -369,7 +437,7 @@ def plan_cycle(
             action = _document_action(
                 document, delivery, users_with_line, member_ids, entry_uids, uid_base
             )
-            if action is not None:
+            if action is not None and not (hold and isinstance(action, DeleteDocument)):
                 actions.append(action)
 
     return Plan(actions=tuple(actions), warnings=tuple(warnings), logins=logins)

@@ -22,6 +22,15 @@ wait_for() {
 # the smoke compose file keeps the default UID_BASE of 20000
 account_of() { echo "u$((20000 + $1))"; }
 cycle() { compose exec -T smb smb-sync sync; }
+# The output of a cycle that the script starts reaches no container log, so
+# a failed cycle shows its own output.
+quiet_cycle() {
+    local out
+    if ! out=$(cycle 2>&1); then
+        printf '%s\n' "$out" >&2
+        fail "the sync command failed"
+    fi
+}
 regen() { compose exec -T smb smb-sync regen "$1"; }
 password_in() { awk '/Password:/{print $NF}' <<<"$1"; }
 
@@ -122,6 +131,40 @@ smb_lists() {
         sh -c 'smbclient //localhost/inbox -U "$SMBLOGIN%$SMBPASS" -c ls') || return
     grep -q "$3" <<<"$listing"
 }
+sessions_of() {
+    local status
+    status=$(compose exec -T smb smbstatus -b --json 2>/dev/null) || return
+    jq -r --arg account "$1" '[.sessions[] | select(.username == $account)] | length' <<<"$status"
+}
+has_session() {
+    local count
+    count=$(sessions_of "$1") || return
+    [ "$count" -ge 1 ]
+}
+no_session() {
+    local count
+    count=$(sessions_of "$1") || return
+    [ "$count" = 0 ]
+}
+# holds a session open for two minutes in the background of the container
+open_session() {
+    # shellcheck disable=SC2016 # the variables expand in the shell of the container
+    compose exec -d -e SMBLOGIN="$1" -e SMBPASS="$2" smb sh -c \
+        '(echo ls; sleep 120) | smbclient //localhost/inbox -U "$SMBLOGIN%$SMBPASS" >/dev/null 2>&1'
+}
+entry_closed() {
+    local entry
+    entry=$(compose exec -T smb pdbedit -L -v -u "$1" 2>/dev/null) || return
+    grep -Eq '^Account Flags: +\[[A-Z ]*D' <<<"$entry"
+}
+# prints the field $2 of the managed workflow of the account $1
+workflow_field() {
+    local workflows
+    workflows=$(api "$API/api/workflows/") || return
+    jq -r --arg name "[smb-sync] $1" --arg field "$2" \
+        '.results[] | select(.name == $name) | .[$field]' <<<"$workflows"
+}
+first_cycle_done() { compose exec -T smb test -e /run/smb-sync.heartbeat; }
 sees_document() {
     local documents
     documents=$(with_token "$1" -G --data-urlencode "title__iexact=$2" \
@@ -196,6 +239,12 @@ refuses_to_start() {
 }
 
 cleanup() {
+    local code=$?
+    # the teardown below removes the container together with its log
+    if [ "$code" != 0 ] && [ -n "$(compose ps -a -q smb 2>/dev/null)" ]; then
+        echo "== the last lines of the log of the smb container ==" >&2
+        compose logs --tail 40 smb >&2 || true
+    fi
     compose down -v --remove-orphans >/dev/null 2>&1 || true
     docker rm -f -v smb-sync-smoke-check >/dev/null 2>&1 || true
     docker volume rm smb-sync-smoke-base >/dev/null 2>&1 || true
@@ -218,10 +267,11 @@ docker rm -f -v smb-sync-smoke-check >/dev/null 2>&1 || true
 docker run -d --name smb-sync-smoke-check -e PAPERLESS_URL=http://paperless:8000 \
     -e PAPERLESS_API_TOKEN=unset -v smb-sync-smoke-base:/var/lib/samba "$SMOKE_IMAGE" >/dev/null \
     || fail "could not start the container with the default UID_BASE"
-wait_for "the first start did not store the UID_BASE" \
-    docker exec smb-sync-smoke-check test -e /var/lib/samba/smb-sync-uid-base
-docker exec smb-sync-smoke-check grep -qxF -- '!nobody = *' /var/lib/samba/smb-sync-usermap \
-    || fail "the map of the first start lacks the line '!nobody = *'"
+# the volume check writes the map after the stored UID_BASE
+wait_for "the map of the first start lacks the line '!nobody = *'" \
+    docker exec smb-sync-smoke-check grep -sqxF -- '!nobody = *' /var/lib/samba/smb-sync-usermap
+docker exec smb-sync-smoke-check test -e /var/lib/samba/smb-sync-uid-base \
+    || fail "the first start did not store the UID_BASE"
 refuses_to_start "another UID_BASE" "UID_BASE is 30000" -e PAPERLESS_URL=http://paperless:8000 \
     -e PAPERLESS_API_TOKEN=unset -e UID_BASE=30000 -v smb-sync-smoke-base:/var/lib/samba
 
@@ -300,10 +350,6 @@ NEW=$(password_in "$REGEN")
 smb_login carol "$NEW" || fail "carol could not log in with the new password"
 login_refused carol "$PASSWORD" NT_STATUS_LOGON_FAILURE \
     || fail "the old password of carol was not refused"
-log_lacks "$PASSWORD" || fail "the log holds the first password of carol"
-log_lacks "$NEW" || fail "the log holds the new password of carol"
-# a search that finds nothing would pass the two checks above
-logged_line "smb-sync regen carol" || fail "the log lacks the line of the creation of carol"
 PASSWORD=$NEW
 
 echo "== asserting a rename =="
@@ -351,8 +397,8 @@ jq -e '.count == 0' <<<"$SEEN" >/dev/null \
 
 echo "== asserting a settled state =="
 # the first cycle takes up what the daemon has not reached yet
-cycle >/dev/null || fail "the sync command failed"
-SETTLED=$(cycle) || fail "the sync command failed"
+quiet_cycle
+SETTLED=$(cycle 2>&1) || fail "the sync command failed"
 [ -z "$SETTLED" ] || fail "a cycle in a settled state did something: $SETTLED"
 
 echo "== asserting deprovisioning =="
@@ -365,8 +411,180 @@ fi
 if compose exec -T smb test -e "/shares/inbox/$CAROL"; then fail "folder of carol not removed"; fi
 WORKFLOWS=$(api "$API/api/workflows/" | jq -r '.results[].name') || fail "could not list workflows"
 if grep -qxF "[smb-sync] $CAROL" <<<"$WORKFLOWS"; then fail "workflow of carol not removed"; fi
+grep -qxF "[smb-sync] $DAVE" <<<"$WORKFLOWS" || fail "the removal of carol took the workflow of dave"
 MAP=$(compose exec -T smb cat /var/lib/samba/smb-sync-usermap) || fail "could not read the map"
 if grep -q "^!$CAROL " <<<"$MAP"; then fail "the map still has a line of carol"; fi
+grep -q "^!$DAVE " <<<"$MAP" || fail "the removal of carol took the line of dave out of the map"
+
+echo "== asserting a new account before its login opens =="
+# Each state below lasts one cycle, which a daemon that runs every 5 seconds
+# would end before a check. From here the daemon sleeps an hour after its first
+# cycle, and the script starts each cycle.
+# The first cycle of the new container makes the account of frank, so that its
+# log is the one that the checks read. The old container would make it first,
+# without the document, so it stops before frank exists.
+compose stop smb
+FRANK_ID=$(api -X POST "$API/api/users/" \
+    -d "{\"username\":\"frank\",\"password\":\"paperless-pass\",\"groups\":[$GROUP_ID]}" | jq -r .id)
+FRANK=$(account_of "$FRANK_ID")
+export SMOKE_DOCUMENT=true SMOKE_POLL=3600
+compose up -d smb
+wait_for "the smb container did not finish its first cycle" first_cycle_done
+UPLOAD="[smb-sync] credentials frank (user $FRANK_ID)"
+wait_for "the credentials document of frank did not appear" sees_document "$TOKEN" "$UPLOAD"
+DOCUMENT=$(with_token "$TOKEN" -G --data-urlencode "title__iexact=$UPLOAD" "$API/api/documents/") \
+    || fail "could not list documents"
+DOCUMENT_ID=$(jq -er '.results[0].id' <<<"$DOCUMENT") || fail "no id for the document of frank"
+FRANK_PASSWORD=$(password_in "$(jq -r '.results[0].content' <<<"$DOCUMENT")")
+[ -n "$FRANK_PASSWORD" ] || fail "the document of frank holds no password"
+login_refused frank "$FRANK_PASSWORD" NT_STATUS_ACCOUNT_DISABLED \
+    || fail "the login of frank was open before the cycle that finds the workflow"
+log_lacks "$FRANK_PASSWORD" || fail "the log holds the password of frank"
+# a search that finds nothing would pass the check above
+logged_line "smb-sync regen frank" || fail "the log lacks the line of the creation of frank"
+quiet_cycle
+smb_login frank "$FRANK_PASSWORD" || fail "frank could not log in with the password of the document"
+
+echo "== asserting the credentials document =="
+# the cycle that opened the login also handed the document over
+FRANK_TOKEN=$(user_token frank paperless-pass) || fail "could not obtain the token of frank"
+sees_document "$FRANK_TOKEN" '[smb-sync] credentials frank' \
+    || fail "frank does not see his credentials document"
+document_holds "$FRANK_TOKEN" "$DOCUMENT_ID" "$FRANK_PASSWORD" \
+    || fail "the document of frank does not hold his password"
+DAVE_TOKEN=$(user_token dave paperless-pass) || fail "could not obtain the token of dave"
+COUNT=$(titled_count "$DAVE_TOKEN" '[smb-sync] credentials frank') \
+    || fail "dave could not list documents"
+[ "$COUNT" = 0 ] || fail "dave sees the credentials document of frank"
+api -X PATCH "$API/api/documents/$DOCUMENT_ID/" \
+    -d "{\"set_permissions\":{\"view\":{\"users\":[$DAVE_ID],\"groups\":[]}}}" >/dev/null \
+    || fail "could not give dave a view right on the document of frank"
+COUNT=$(titled_count "$DAVE_TOKEN" '[smb-sync] credentials frank') \
+    || fail "dave could not list documents"
+[ "$COUNT" = 1 ] || fail "dave does not see the document of frank after the grant"
+REGEN=$(regen frank) || fail "regen of frank failed"
+# the regen resets the rights before it returns, so this check does not wait
+COUNT=$(titled_count "$DAVE_TOKEN" '[smb-sync] credentials frank') \
+    || fail "dave could not list documents"
+[ "$COUNT" = 0 ] || fail "dave still sees the document of frank after the regen"
+FRANK_PASSWORD=$(password_in "$REGEN")
+[ -n "$FRANK_PASSWORD" ] || fail "regen of frank printed no password"
+# paperless imports the new version in the background
+wait_for "the document of frank did not get the new password" \
+    document_holds "$FRANK_TOKEN" "$DOCUMENT_ID" "$FRANK_PASSWORD"
+api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"username":"gina"}' >/dev/null \
+    || fail "could not rename frank to gina"
+quiet_cycle
+document_titled "$DOCUMENT_ID" '[smb-sync] credentials gina' \
+    || fail "the document was not retitled for gina"
+only_note_names "$DOCUMENT_ID" gina \
+    || fail "the document of gina does not have exactly one note that names gina"
+smb_login gina "$FRANK_PASSWORD" || fail "gina could not log in with the password of the regen"
+api -X PATCH "$API/api/users/$FRANK_ID/" -d '{"groups":[]}' >/dev/null \
+    || fail "could not take gina out of the group"
+quiet_cycle
+document_gone "$DOCUMENT_ID" || fail "the document of gina was not deleted"
+trash_empty || fail "the trash still holds a document"
+lacks_account "$FRANK" || fail "samba account of gina not removed"
+
+echo "== asserting the deletion of a credentials document without an owner =="
+upload_text '[smb-sync] credentials ghost' smb-credentials.txt 'smoke credentials of ghost' \
+    || fail "could not upload the credentials file of ghost"
+upload_text '[smb-sync] credentials phantom' notes.txt 'smoke notes of phantom' \
+    || fail "could not upload the notes of phantom"
+wait_for "the credentials file of ghost was not imported" \
+    sees_document "$TOKEN" '[smb-sync] credentials ghost'
+wait_for "the notes of phantom were not imported" \
+    sees_document "$TOKEN" '[smb-sync] credentials phantom'
+GHOST_ID=$(titled_id '[smb-sync] credentials ghost') || fail "no id for the document of ghost"
+PHANTOM_ID=$(titled_id '[smb-sync] credentials phantom') \
+    || fail "no id for the document of phantom"
+for id in "$GHOST_ID" "$PHANTOM_ID"; do
+    api -X PATCH "$API/api/documents/$id/" -d '{"owner":null}' >/dev/null \
+        || fail "could not remove the owner of document $id"
+done
+quiet_cycle
+document_gone "$GHOST_ID" || fail "the credentials file of ghost was not deleted"
+trash_empty || fail "the trash still holds a document"
+api "$API/api/documents/$PHANTOM_ID/" >/dev/null \
+    || fail "the notes of phantom were deleted for their title alone"
+
+echo "== asserting a closed login while the workflow is gone =="
+open_session dave "$DAVE_PASSWORD" || fail "could not open a session of dave"
+wait_for "the session of dave did not appear" has_session "$DAVE"
+WORKFLOW_ID=$(workflow_field "$DAVE" id) || fail "could not list workflows"
+[ -n "$WORKFLOW_ID" ] || fail "workflow of dave missing"
+api -X DELETE "$API/api/workflows/$WORKFLOW_ID/" >/dev/null \
+    || fail "could not delete the workflow of dave"
+quiet_cycle
+wait_for "the session of dave did not end" no_session "$DAVE"
+login_refused dave "$DAVE_PASSWORD" NT_STATUS_ACCOUNT_DISABLED \
+    || fail "the login of dave stayed open without its workflow"
+has_workflow "$DAVE" || fail "the workflow of dave was not made again"
+quiet_cycle
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once his workflow was back"
+
+echo "== asserting a closed login while the workflow is disabled =="
+WORKFLOW_ID=$(workflow_field "$DAVE" id) || fail "could not list workflows"
+[ -n "$WORKFLOW_ID" ] || fail "workflow of dave missing"
+api -X PATCH "$API/api/workflows/$WORKFLOW_ID/" -d '{"enabled":false}' >/dev/null \
+    || fail "could not disable the workflow of dave"
+quiet_cycle
+login_refused dave "$DAVE_PASSWORD" NT_STATUS_ACCOUNT_DISABLED \
+    || fail "the login of dave stayed open with a disabled workflow"
+ENABLED=$(workflow_field "$DAVE" enabled) || fail "could not list workflows"
+[ "$ENABLED" = true ] || fail "the workflow of dave was not enabled again"
+quiet_cycle
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once his workflow was enabled"
+
+echo "== asserting a closed login while the user is inactive =="
+open_session dave "$DAVE_PASSWORD" || fail "could not open a session of dave"
+wait_for "the session of dave did not appear" has_session "$DAVE"
+api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"is_active":false}' >/dev/null \
+    || fail "could not deactivate dave"
+quiet_cycle
+wait_for "the session of dave did not end" no_session "$DAVE"
+login_refused dave "$DAVE_PASSWORD" NT_STATUS_ACCOUNT_DISABLED \
+    || fail "the login of dave stayed open while he was inactive"
+api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"is_active":true}' >/dev/null \
+    || fail "could not activate dave"
+quiet_cycle
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once he was active again"
+
+echo "== asserting the hold for an entry of another join date =="
+ERIN_ID=$(api -X POST "$API/api/users/" \
+    -d "{\"username\":\"erin\",\"password\":\"paperless-pass\",\"groups\":[$GROUP_ID]}" | jq -r .id)
+ERIN=$(account_of "$ERIN_ID")
+quiet_cycle
+quiet_cycle
+has_account "$ERIN" || fail "samba account of erin did not appear"
+compose exec -T smb test -d "/shares/inbox/$ERIN" || fail "inbox folder of erin did not appear"
+DAVE_RECORD=$(api "$API/api/users/$DAVE_ID/") || fail "could not read the user dave"
+JOINED=$(jq -er .date_joined <<<"$DAVE_RECORD") || fail "dave has no join date"
+api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"date_joined":"2001-02-03T04:05:06Z"}' >/dev/null \
+    || fail "could not change the join date of dave"
+# a join date that paperless did not keep must not read as a defect of the hold
+DAVE_RECORD=$(api "$API/api/users/$DAVE_ID/") || fail "could not read the user dave"
+[[ $(jq -r .date_joined <<<"$DAVE_RECORD") == 2001-02-03T04:05:06* ]] \
+    || fail "paperless did not take the new join date"
+api -X PATCH "$API/api/users/$ERIN_ID/" -d '{"groups":[]}' >/dev/null \
+    || fail "could not take erin out of the group"
+quiet_cycle
+entry_closed "$DAVE" || fail "the entry of dave stayed open with another join date"
+# the map has no line for dave during the hold
+login_refused dave "$DAVE_PASSWORD" NT_STATUS_LOGON_FAILURE \
+    || fail "the login name dave was not refused during the hold"
+has_account "$ERIN" || fail "the hold removed the samba account of erin"
+entry_closed "$ERIN" || fail "the entry of erin stayed open during the hold"
+compose exec -T smb test -d "/shares/inbox/$ERIN" || fail "the hold removed the folder of erin"
+api -X PATCH "$API/api/users/$DAVE_ID/" -d "$(jq -n --arg joined "$JOINED" '{date_joined: $joined}')" \
+    >/dev/null || fail "could not set the join date of dave back"
+quiet_cycle
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in after the hold"
+lacks_account "$ERIN" || fail "samba account of erin not removed after the hold"
+if compose exec -T smb test -e "/shares/inbox/$ERIN"; then
+    fail "folder of erin not removed after the hold"
+fi
 
 echo "== asserting a login after a recreation without paperless =="
 compose stop paperless

@@ -26,7 +26,7 @@ services:
       CREDENTIALS_DOCUMENT: ${SMOKE_DOCUMENT:-false}
       PAPERLESS_API_TOKEN: ${SMOKE_TOKEN:-unset}
       PAPERLESS_URL: http://paperless:8000
-      POLL_INTERVAL: "5"
+      POLL_INTERVAL: ${SMOKE_POLL:-5}
     volumes:
       - inbox:/shares/inbox
       - samba-data:/var/lib/samba

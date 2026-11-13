@@ -16,7 +16,7 @@ def credentials_block(
     username: str,
     password: str,
     *,
-    for_log: bool = True,
+    for_terminal: bool = True,
 ) -> str:
     server = host or "<server>"
     lines = [
@@ -27,9 +27,9 @@ def credentials_block(
         f"  Username: {username}",
         f"  Password: {password}",
     ]
-    # The document keeps the block, and `smb-sync regen` runs inside the
-    # container, so both lines hold for a reader of the log alone.
-    if for_log:
+    # The document keeps the block, and its reader has no shell in the
+    # container, so both lines are for the terminal alone.
+    if for_terminal:
         lines.append("This password is shown only once.")
         lines.append(f"Regenerate with: smb-sync regen {username}")
     lines.append("=" * 60)

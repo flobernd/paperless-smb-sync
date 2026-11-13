@@ -146,7 +146,15 @@ def _member_actions(
         # NT hash.
         # create_unix_user is idempotent, so this is safe to re-emit.
         actions.append(RepairUnixAccount(account=account.name, uid=account.uid))
-    if account.enabled and not user.is_active:
+    # paperless imports a scan with or without a workflow, and only a workflow
+    # that is the full definition for this member gives the scan its owner.
+    # The login closes before the workflow is written back and opens in a
+    # later cycle that finds the workflow, so a failed write leaves it closed.
+    workflow = workflows.get(account.name)
+    may_open = (
+        user.is_active and workflow is not None and workflow.defined_for == user.id
+    )
+    if account.enabled and not may_open:
         actions.append(DisableAccount(account=account.name))
     # an existing folder is adopted rather than recreated. Correcting its owner
     # uid also takes over a folder of that name that exists under another uid.
@@ -154,7 +162,7 @@ def _member_actions(
     if folder is None or folder.uid != account.uid:
         actions.append(CreateFolder(account=account.name, uid=account.uid))
     actions.extend(_workflow_action(user, account.name, workflows))
-    if not account.enabled and user.is_active:
+    if not account.enabled and may_open:
         actions.append(EnableAccount(account=account.name))
     return actions
 
@@ -365,9 +373,6 @@ def plan_cycle(
         # a workflow that is left under the account name belongs to this
         # account
         actions.extend(_workflow_action(user, account, workflows))
-        if not user.is_active:
-            # smbpasswd -a creates the account enabled
-            actions.append(DisableAccount(account=account))
         created.add(account)
 
     if hold_cause is not None:

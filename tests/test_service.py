@@ -100,6 +100,9 @@ class FakeSystem:
     def store_mark(self, account, uid, joined):
         self.calls.append(("store_mark", account, uid, joined))
 
+    def disable_samba_account(self, account):
+        self.calls.append(("disable_samba_account", account))
+
     def create_inbox_folder(self, username, uid):
         self.calls.append(("create_inbox_folder", username))
 

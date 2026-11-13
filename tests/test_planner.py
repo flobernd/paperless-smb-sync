@@ -124,19 +124,17 @@ def test_a_reactivated_member_gets_an_open_login():
     assert planned([member(5, "alice")], actual).actions == (EnableAccount(account="u20005"),)
 
 
-def test_a_new_inactive_member_gets_a_closed_login():
-    bob = member(6, "bob", active=False)
-    assert planned([bob], state()).actions == (
-        WriteMap(("!u20006 = bob", "!nobody = *")),
-        CreateAccount(user=bob, uid=20006, upload=False),
-        CreateWorkflow(user_id=6, account="u20006"),
-        DisableAccount(account="u20006"),
+def test_a_closed_login_stays_closed_while_its_workflow_is_missing():
+    actual = replace(settled((5, "alice")), accounts=(entry(5, enabled=False),), workflows=())
+    assert planned([member(5, "alice")], actual).actions == (
+        CreateWorkflow(user_id=5, account="u20005"),
     )
 
 
 def test_a_missing_folder_and_a_missing_workflow_are_made_again():
     actual = replace(settled((5, "alice")), folders=(), workflows=())
     assert planned([member(5, "alice")], actual).actions == (
+        DisableAccount(account="u20005"),
         CreateFolder(account="u20005", uid=20005),
         CreateWorkflow(user_id=5, account="u20005"),
     )
@@ -148,6 +146,7 @@ def test_a_workflow_that_is_no_definition_for_its_member_is_written_back(defined
     changed = ManagedWorkflow(105, "u20005", defined_for)
     actual = replace(settled((5, "alice")), workflows=(changed,))
     assert planned([member(5, "alice")], actual).actions == (
+        DisableAccount(account="u20005"),
         UpdateWorkflow(workflow_id=105, user_id=5, account="u20005"),
     )
 

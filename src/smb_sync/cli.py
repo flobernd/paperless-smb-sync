@@ -110,7 +110,7 @@ def _update_document(
     cfg: Config, api: PaperlessClient, username: str, user_id: int, password: str
 ) -> None:
     block = credentials_block(
-        cfg.smb_host, cfg.share_name, username, password, for_log=False
+        cfg.smb_host, cfg.share_name, username, password, for_terminal=False
     )
     try:
         token_user = api.token_user()

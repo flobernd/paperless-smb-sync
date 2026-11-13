@@ -36,7 +36,7 @@ def execute(
     smb_host: str,
     share_name: str,
 ) -> int:
-    announce = partial(_announce_credentials, api, smb_host, share_name)
+    upload_credentials = partial(_upload_credentials, api, smb_host, share_name)
     failures = 0
     map_failed = False
     held = 0
@@ -51,7 +51,7 @@ def execute(
             held += 1
             continue
         try:
-            _apply(action, system, api, announce)
+            _apply(action, system, api, upload_credentials)
         except Exception as exc:
             failures += 1
             map_failed = map_failed or isinstance(action, WriteMap)
@@ -73,28 +73,29 @@ def execute(
     return failures
 
 
-def _announce_credentials(
+def _upload_credentials(
     api: PaperlessClient,
     smb_host: str,
     share_name: str,
     user: PaperlessUser,
     password: str,
-    upload: bool,
 ) -> None:
-    print(credentials_block(smb_host, share_name, user.username, password), flush=True)
-    if not upload:
-        return
     block = credentials_block(
-        smb_host, share_name, user.username, password, for_log=False
+        smb_host, share_name, user.username, password, for_terminal=False
     )
     try:
         api.upload_credentials(user.id, user.username, block)
         log.info("uploaded the credentials document of '%s'", user.username)
     except PaperlessError as exc:
-        # the account is complete and the block is in the log, so a failed
-        # upload does not fail the creation
+        # A failed upload leaves a complete account whose password no person
+        # has, and `smb-sync regen` gives it a new one, so the creation does
+        # not fail.
         log.error(
-            "could not upload the credentials document of '%s': %s", user.username, exc
+            "could not upload the credentials document of '%s': %s. Run "
+            "'smb-sync regen %s' to set a new password and show it.",
+            user.username,
+            exc,
+            user.username,
         )
 
 
@@ -108,7 +109,7 @@ def _apply(
     action: Action,
     system: SystemAdapter,
     api: PaperlessClient,
-    announce: Callable[[PaperlessUser, str, bool], None],
+    upload_credentials: Callable[[PaperlessUser, str], None],
 ) -> None:
     match action:
         case WriteMap(lines=lines):
@@ -122,17 +123,21 @@ def _apply(
             password = generate_password()
             system.set_samba_password(account, password, create=True)
             # An entry without the mark is one that the daemon does not
-            # manage, so no person gets a password for it. A stop between the
-            # mark and the output leaves an account with a password that
-            # nobody received, and `smb-sync regen` makes a new one.
+            # manage, so no person gets a password for it.
             system.store_mark(account, uid, user.joined)
+            # smbpasswd -a creates the entry enabled. A later cycle enables it
+            # once the workflow of the account exists.
+            system.disable_samba_account(account)
             log.info(
-                "provisioned samba account '%s' (uid %d) for the login name '%s'",
+                "provisioned samba account '%s' (uid %d) for the login name '%s'. "
+                "Run 'smb-sync regen %s' to set a new password and show it.",
                 account,
                 uid,
                 user.username,
+                user.username,
             )
-            announce(user, password, upload)
+            if upload:
+                upload_credentials(user, password)
         case RepairUnixAccount(account=account, uid=uid):
             system.create_unix_user(account, uid)
             log.warning(
@@ -184,7 +189,7 @@ def _apply(
             log.info("deleted samba account %s", _named(account, login_name))
         case DisableAccount(account=account):
             system.disable_samba_account(account)
-            log.info("disabled samba account '%s' (user inactive)", account)
+            log.info("disabled samba account '%s'", account)
         case EnableAccount(account=account):
             system.enable_samba_account(account)
             log.info("re-enabled samba account '%s'", account)

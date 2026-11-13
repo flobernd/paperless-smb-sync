@@ -106,29 +106,12 @@ def member(user_id, username, active=True):
     return PaperlessUser(user_id, username, active, 1731405600123, True)
 
 
-def test_create_account_sets_password_and_prints_once(capsys):
-    user = member(5, "alice")
-    failures, system, _ = run([CreateAccount(user=user, uid=20005, upload=False)])
-    assert failures == 0
-    assert system.calls[0] == ("create_unix_user", "u20005", 20005)
-    name, username, password, create = system.calls[1]
-    assert (name, username, create) == ("set_samba_password", "u20005", True)
-    out = capsys.readouterr().out
-    assert "SMB credentials for 'alice'" in out
-    assert password in out
-    assert "\\\\nas.lan\\inbox" in out
-    assert system.calls[-1] == ("store_mark", "u20005", 20005, 1731405600123)
-
-
-def test_a_creation_whose_mark_write_fails_hands_out_no_password(capsys):
-    user = member(5, "alice")
+def test_a_creation_whose_mark_write_fails_hands_out_no_password():
     failures, system, api = run(
-        [CreateAccount(user=user, uid=20005, upload=True)],
+        [CreateAccount(user=member(5, "alice"), uid=20005, upload=True)],
         system=FakeSystem(fail_on="store_mark"),
     )
     assert failures == 1
-    _, _, password, _ = system.calls[1]
-    assert password not in capsys.readouterr().out
     assert api.calls == []
 
 
@@ -312,24 +295,25 @@ def test_a_failed_command_or_request_logs_one_line_without_a_traceback(error, ca
     assert not record.exc_info
 
 
-def test_a_failed_upload_does_not_fail_the_creation(caplog):
-    user = member(5, "alice")
-    with caplog.at_level(logging.ERROR):
+def test_a_failed_upload_does_not_fail_the_creation(caplog, capsys):
+    with caplog.at_level(logging.INFO):
         failures, system, _ = run(
-            [CreateAccount(user=user, uid=20005, upload=True)],
+            [CreateAccount(user=member(5, "alice"), uid=20005, upload=True)],
             api=FakeApi(fail_upload=True),
         )
     assert failures == 0
-    assert system.calls[-1] == ("store_mark", "u20005", 20005, 1731405600123)
+    assert system.calls[-1] == ("disable_samba_account", "u20005")
     assert "upload refused" in caplog.text
+    _, _, password, _ = system.calls[1]
+    assert password not in caplog.text + capsys.readouterr().out
 
 
-def test_the_uploaded_block_drops_the_lines_for_the_log(capsys):
+def test_the_uploaded_block_drops_the_lines_for_the_terminal(caplog):
     api = FakeApi()
-    user = member(5, "alice")
-    run([CreateAccount(user=user, uid=20005, upload=True)], api=api)
+    with caplog.at_level(logging.INFO):
+        run([CreateAccount(user=member(5, "alice"), uid=20005, upload=True)], api=api)
     (block,) = api.blocks
     assert "Username: alice" in block
     assert "smb-sync regen" not in block
-    # the log keeps the hint, since that is where an admin can act on it
-    assert "smb-sync regen alice" in capsys.readouterr().out
+    # the log line of the creation names the way to a password
+    assert "smb-sync regen alice" in caplog.text

@@ -6,6 +6,9 @@ services:
     ports:
       - "445:445"
     environment:
+      # The host name webserver resolves only on the network of the compose
+      # project of paperless. A copy in another project joins that network or
+      # uses an address that reaches paperless.
       PAPERLESS_URL: http://webserver:8000
       PAPERLESS_API_TOKEN: change-me
       # Needs the token of a superuser. It also needs SMB_HOST, since the
@@ -20,7 +23,8 @@ services:
       # UID_BASE: "20000"
     volumes:
       - /srv/paperless/inbox:/shares/inbox
-      # Holds passdb.tdb. Without it each user gets a new password on recreate.
+      # Holds passdb.tdb, the stored UID_BASE and the username map. Without
+      # it each account is lost on recreate.
       - samba-data:/var/lib/samba
       # - ./smb-custom.conf:/etc/samba/conf.d/custom.conf:ro
 

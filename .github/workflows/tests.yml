@@ -18,6 +18,10 @@ jobs:
       - run: python3 -m venv .venv
       - run: .venv/bin/pip install -e '.[dev]'
       - run: .venv/bin/python -m pytest -q
+      - env:
+          # Under the exact pin of the dev extra, the wrapper's notice about a newer pyright would show in each run.
+          PYRIGHT_PYTHON_IGNORE_WARNINGS: "1"
+        run: .venv/bin/pyright --pythonpath .venv/bin/python src/smb_sync
       - run: shellcheck docker/entrypoint.sh tests/smoke/run.sh
   tests:
     name: Tests

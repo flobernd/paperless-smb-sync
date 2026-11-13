@@ -64,6 +64,7 @@ def state(**fields):
         folders=(),
         workflows=(),
         unix_names=frozenset(),
+        session_accounts=frozenset(),
         map_lines=("!nobody = *",),
         documents=(),
         token_user=None,
@@ -328,6 +329,44 @@ def test_a_database_that_knows_no_entry_is_a_hold():
         DisableAccount(account="u20006"),
     )
     assert any("hold" in w for w in plan.warnings)
+
+
+@pytest.mark.parametrize(
+    ("users", "actual", "account"),
+    [
+        # an inactive member
+        (
+            [member(5, "alice", active=False)],
+            replace(settled((5, "alice")), accounts=(entry(5, enabled=False),)),
+            "u20005",
+        ),
+        # an entry of another paperless user, since user 6 joined at another time
+        (
+            [member(5, "alice"), PaperlessUser(6, "bob", True, 1, False)],
+            replace(
+                settled((5, "alice"), (6, "bob")),
+                accounts=(entry(5), entry(6, enabled=False)),
+                map_lines=("!u20005 = alice", "!nobody = *"),
+            ),
+            "u20006",
+        ),
+        # an entry without a member in a hold, since paperless knows none of the entries
+        (
+            [member(1, "anna")],
+            replace(settled((5, "alice")), accounts=(entry(5, enabled=False),), map_lines=("!nobody = *",)),
+            "u20005",
+        ),
+    ],
+)
+def test_a_closed_entry_with_a_session_gets_its_login_closed_again(users, actual, account):
+    # the stop of the cycle that closed the login failed
+    actual = replace(actual, session_accounts=frozenset({account}))
+    assert planned(users, actual).actions == (DisableAccount(account=account),)
+
+
+def test_a_session_of_an_open_login_stays():
+    actual = replace(settled((5, "alice")), session_accounts=frozenset({"u20005"}))
+    assert planned([member(5, "alice")], actual).actions == ()
 
 
 def test_a_member_gets_no_account_while_a_folder_of_the_account_name_exists():

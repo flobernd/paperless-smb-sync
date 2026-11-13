@@ -331,3 +331,10 @@ def test_a_session_list_with_the_process_id_1_ends_no_process(tmp_path, monkeypa
     with pytest.raises(CommandError, match="smbstatus"):
         adapter.stop_sessions("u20005")
     assert signaled == []
+
+
+def test_the_session_accounts_are_the_account_names_of_the_session_list(tmp_path):
+    # only the stop, which sends the signals, refuses the process id 1
+    status = session_list(("u20005", 4242), ("u20005", 4243), ("u20006", 1))
+    adapter, _ = make_adapter(tmp_path, {("smbstatus", "-b", "--json"): status})
+    assert adapter.list_session_accounts() == frozenset({"u20005", "u20006"})

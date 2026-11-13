@@ -69,6 +69,7 @@ class ActualState:
     folders: tuple[InboxFolder, ...]
     workflows: tuple[ManagedWorkflow, ...]
     unix_names: frozenset[str]
+    session_accounts: frozenset[str]
     map_lines: tuple[str, ...]
     documents: tuple[CredentialDocument, ...]
     token_user: TokenUser | None

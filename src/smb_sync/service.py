@@ -62,6 +62,16 @@ def _observe_documents(
         return None, ()
 
 
+def _observe_sessions(system: SystemAdapter) -> frozenset[str]:
+    try:
+        return system.list_session_accounts()
+    except CommandError as exc:
+        # the cycle still has to close logins and remove accounts when
+        # smbstatus is broken
+        log.error("the session list is unavailable in this cycle: %s", exc)
+        return frozenset()
+
+
 def observe(
     cfg: Config, api: PaperlessClient, system: SystemAdapter
 ) -> tuple[list[PaperlessUser], ActualState]:
@@ -75,6 +85,7 @@ def observe(
         folders=tuple(system.list_inbox_folders()),
         workflows=tuple(workflows),
         unix_names=system.list_unix_names(),
+        session_accounts=_observe_sessions(system),
         map_lines=system.read_usermap() or (),
         documents=documents,
         token_user=token_user,

@@ -118,8 +118,9 @@ account name for the filter.
 The daemon closes a login for an entry of another paperless user, for an inactive member, at the start of a removal,
 instead of a removal during a hold (see Entries of another paperless database below), and for a workflow that is gone or
 changed. Samba keeps a session that started before, so the daemon also ends the open SMB sessions of the account when it
-closes its login. The stop ends the `smbd` process of the client connection, so a session of another account on the same
-connection ends with it, and that client connects again.
+closes its login. A session that is left on a closed login, for example after a stop that failed, ends in the next
+cycle. The stop ends the `smbd` process of the client connection, so a session of another account on the same connection
+ends with it, and that client connects again.
 
 ### Passwords are generated and never logged
 

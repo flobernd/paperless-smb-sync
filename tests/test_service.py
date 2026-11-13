@@ -84,6 +84,9 @@ class FakeSystem:
     def list_unix_names(self):
         return frozenset()
 
+    def list_session_accounts(self):
+        return frozenset()
+
     def read_usermap(self):
         return None
 
@@ -263,6 +266,18 @@ def test_a_failed_document_read_does_not_stop_the_cycle(api_class, caplog):
     assert api.created == ["u20005"]
     assert api.uploaded == []
     assert "documents down" in caplog.text
+
+
+def test_a_failed_session_read_does_not_stop_the_cycle(caplog):
+    class NoSessionList(FakeSystem):
+        def list_session_accounts(self):
+            raise CommandError("smbstatus broken")
+
+    system = NoSessionList()
+    with caplog.at_level(logging.ERROR):
+        run_cycle(CFG, FakeApi(users=[member(5, "alice")]), system)
+    assert ("create_unix_user", "u20005", 20005) in system.calls
+    assert "smbstatus broken" in caplog.text
 
 
 def test_restore_makes_unix_accounts_for_counted_entries_only():

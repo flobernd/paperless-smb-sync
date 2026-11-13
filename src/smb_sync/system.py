@@ -128,6 +128,21 @@ class SystemAdapter:
     def list_unix_names(self) -> frozenset[str]:
         return frozenset(entry.pw_name for entry in pwd.getpwall())
 
+    def list_session_accounts(self) -> frozenset[str]:
+        return frozenset(account for account, _ in self._read_sessions())
+
+    def _read_sessions(self) -> list[tuple[str, str]]:
+        output = self._run(["smbstatus", "-b", "--json"])
+        try:
+            return [
+                (session["username"], session["server_id"]["pid"])
+                for session in json.loads(output)["sessions"].values()
+            ]
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise CommandError(
+                f"cannot read the session list of smbstatus: {exc!r}"
+            ) from exc
+
     def list_inbox_folders(self) -> list[InboxFolder]:
         folders: list[InboxFolder] = []
         with (
@@ -220,16 +235,13 @@ class SystemAdapter:
         # ends the smbd process of each one. That process serves one client
         # connection, so a session of another account on that connection
         # ends with it.
-        output = self._run(["smbstatus", "-b", "--json"])
+        sessions = self._read_sessions()
         try:
-            pids = [
-                _process_id(session["server_id"]["pid"])
-                for session in json.loads(output)["sessions"].values()
-                if session["username"] == account
-            ]
-        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            pids = [_process_id(pid) for name, pid in sessions if name == account]
+        except (TypeError, ValueError) as exc:
             raise CommandError(
-                f"cannot read the session list of smbstatus: {exc!r}"
+                f"smbstatus lists a session of '{account}' with a process id "
+                f"that the stop does not signal: {exc!r}"
             ) from exc
         for pid in pids:
             with _command_error(

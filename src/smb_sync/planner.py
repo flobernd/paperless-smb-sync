@@ -143,6 +143,7 @@ def _member_actions(
     user: PaperlessUser,
     account: ManagedAccount,
     unix_names: Container[str],
+    session_accounts: Container[str],
     folders: Mapping[str, InboxFolder],
     workflows: Mapping[str, ManagedWorkflow],
     paperless_gid: int,
@@ -162,7 +163,7 @@ def _member_actions(
     may_open = (
         user.is_active and workflow is not None and workflow.defined_for == user.id
     )
-    if account.enabled and not may_open:
+    if (account.enabled or account.name in session_accounts) and not may_open:
         actions.append(DisableAccount(account=account.name))
     # an existing folder is adopted rather than recreated, and the repair of its
     # owner also takes over a folder of that name under another uid. paperless
@@ -320,9 +321,12 @@ def plan_cycle(
         actions.append(WriteMap(lines=lines))
 
     held: set[int] = set()
+    # A login closes again while its account still has a session, so the next
+    # cycle ends a session that a failed stop left, or one that started while
+    # the login closed.
     for account in counted:
         if account.uid in foreign_uids:
-            if account.enabled:
+            if account.enabled or account.name in actual.session_accounts:
                 actions.append(DisableAccount(account=account.name))
             warnings.append(
                 f"samba entry '{account.name}' was made for another paperless user "
@@ -337,12 +341,18 @@ def plan_cycle(
             # workflow, and only the login name is gone
             actions.extend(
                 _member_actions(
-                    user, account, actual.unix_names, folders, workflows, paperless_gid
+                    user,
+                    account,
+                    actual.unix_names,
+                    actual.session_accounts,
+                    folders,
+                    workflows,
+                    paperless_gid,
                 )
             )
             continue
         if hold:
-            if account.enabled:
+            if account.enabled or account.name in actual.session_accounts:
                 actions.append(DisableAccount(account=account.name))
             continue
         user_id = account.user_id

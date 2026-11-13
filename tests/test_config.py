@@ -44,6 +44,18 @@ def test_poll_interval_must_be_one_or_more():
     assert load_config({**BASE_ENV, "POLL_INTERVAL": "1"}).poll_interval == 1
 
 
+def test_uid_base_must_be_1000_or_more():
+    with pytest.raises(ValueError, match="UID_BASE"):
+        load_config({**BASE_ENV, "UID_BASE": "999"})
+    assert load_config({**BASE_ENV, "UID_BASE": "1000"}).uid_base == 1000
+
+
+def test_paperless_gid_must_be_1_or_more():
+    with pytest.raises(ValueError, match="PAPERLESS_GID"):
+        load_config({**BASE_ENV, "PAPERLESS_GID": "0"})
+    assert load_config({**BASE_ENV, "PAPERLESS_GID": "1"}).paperless_gid == 1
+
+
 def test_credentials_document_must_be_a_known_flag_value():
     with pytest.raises(ValueError, match="CREDENTIALS_DOCUMENT"):
         load_config({**BASE_ENV, "CREDENTIALS_DOCUMENT": "ture"})

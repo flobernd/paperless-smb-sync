@@ -8,7 +8,13 @@ from pathlib import Path
 
 from .config import Config
 from .executor import execute
-from .model import ActualState, CredentialDocument, PaperlessUser, TokenUser
+from .model import (
+    MAP_LAST_LINE,
+    ActualState,
+    CredentialDocument,
+    PaperlessUser,
+    TokenUser,
+)
 from .paperless import PaperlessClient, PaperlessError
 from .planner import counted_accounts, plan_cycle
 from .system import CommandError, SystemAdapter
@@ -184,3 +190,28 @@ def restore_unix_accounts(system: SystemAdapter, uid_base: int) -> int:
             )
             failures += 1
     return failures
+
+
+def check_volume(system: SystemAdapter, uid_base: int) -> str | None:
+    stored = system.read_uid_base()
+    if stored is None:
+        accounts = system.list_samba_accounts()
+        if any(a.description.startswith("smb-sync") for a in accounts):
+            return (
+                "the Samba volume holds accounts of an earlier version of smb-sync, "
+                "or it lost the file smb-sync-uid-base. This version needs an empty "
+                "Samba volume and an empty inbox volume, and each user then gets a "
+                "new password."
+            )
+        system.write_uid_base(uid_base)
+    elif stored != str(uid_base):
+        return (
+            f"UID_BASE is {uid_base}, but the Samba volume was made with UID_BASE "
+            f"{stored}. Set UID_BASE back to {stored}, or start with an empty Samba "
+            "volume and an empty inbox volume."
+        )
+    # without the map, an account name is a login name until the first cycle
+    # writes it
+    if system.read_usermap() is None:
+        system.write_usermap((MAP_LAST_LINE,))
+    return None

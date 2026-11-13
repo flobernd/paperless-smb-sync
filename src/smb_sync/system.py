@@ -19,6 +19,11 @@ INBOX_ROOT = "/shares/inbox"
 # container together with the entries that its lines name.
 STATE_DIR = "/var/lib/samba"
 
+# The entrypoint makes this group and the share template admits its members,
+# so the three change together.
+ACCOUNT_GROUP = "smb-sync"
+
+_UID_BASE = "smb-sync-uid-base"
 _USERMAP = "smb-sync-usermap"
 
 
@@ -36,6 +41,18 @@ def _command_error(what: str) -> Generator[None, None, None]:
 
 def _raise_error(error: OSError) -> None:
     raise error
+
+
+def _replace_file(path: Path, text: str) -> None:
+    # After a power loss, a file that was moved before its content reached the
+    # disk can be empty. An empty map gives no login, and an empty base file
+    # refuses each later start.
+    fresh = path.with_name(f"{path.name}.new")
+    with open(fresh, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(fresh, path)
 
 
 def _unix_user(username: str) -> pwd.struct_passwd | None:
@@ -76,6 +93,7 @@ class SystemAdapter:
         self._inbox = Path(inbox_path)
         self._gid = paperless_gid
         self._run = run or _run
+        self._uid_base = Path(state_dir) / _UID_BASE
         self._usermap = Path(state_dir) / _USERMAP
 
     # -- observation -------------------------------------------------
@@ -138,6 +156,10 @@ class SystemAdapter:
     def create_unix_user(self, username: str, uid: int) -> None:
         existing = _unix_user(username)
         if existing is None:
+            # The accounts are no members of the group of paperless, so a share
+            # that does not force the group cannot open the folder of another
+            # account. The managed share forces it, so each file of a session
+            # still gets the group that paperless reads.
             self._run(
                 [
                     "useradd",
@@ -149,7 +171,7 @@ class SystemAdapter:
                     "--uid",
                     str(uid),
                     "--gid",
-                    str(self._gid),
+                    ACCOUNT_GROUP,
                     "--no-user-group",
                     username,
                 ]
@@ -223,10 +245,21 @@ class SystemAdapter:
         # map itself sees a file without its last line, and without that line
         # an account name is a login name. So the lines go into a new file
         # that replaces the map in one step.
-        fresh = self._usermap.with_name(f"{self._usermap.name}.new")
         with _command_error(f"cannot write the username map '{self._usermap}'"):
-            fresh.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
-            os.replace(fresh, self._usermap)
+            _replace_file(self._usermap, "".join(f"{line}\n" for line in lines))
+
+    # -- stored UID_BASE ---------------------------------------------
+
+    def read_uid_base(self) -> str | None:
+        with _command_error(f"cannot read the stored UID_BASE '{self._uid_base}'"):
+            try:
+                return self._uid_base.read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                return None
+
+    def write_uid_base(self, uid_base: int) -> None:
+        with _command_error(f"cannot write the stored UID_BASE '{self._uid_base}'"):
+            _replace_file(self._uid_base, f"{uid_base}\n")
 
     # -- inbox folders -----------------------------------------------
 

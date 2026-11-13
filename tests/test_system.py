@@ -78,7 +78,7 @@ def test_create_unix_user_argv(tmp_path, monkeypatch):
         pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name))
     )
     adapter, run = make_adapter(tmp_path)
-    adapter.create_unix_user("alice", 20005)
+    adapter.create_unix_user("u20005", 20005)
     assert run.calls == [
         (
             (
@@ -91,9 +91,9 @@ def test_create_unix_user_argv(tmp_path, monkeypatch):
                 "--uid",
                 "20005",
                 "--gid",
-                "10000",
+                "smb-sync",
                 "--no-user-group",
-                "alice",
+                "u20005",
             ),
             None,
         )

@@ -11,8 +11,14 @@ if ! smb-sync check; then
     exit 1
 fi
 
+# The group of paperless comes first. A system group that is made before it
+# could take the very id that PAPERLESS_GID names, and the accounts would then
+# be members of the group of paperless.
 if ! getent group paperless >/dev/null; then
-    groupadd --gid "$PAPERLESS_GID" paperless
+    groupadd --non-unique --gid "$PAPERLESS_GID" paperless
+fi
+if ! getent group smb-sync >/dev/null; then
+    groupadd --system smb-sync
 fi
 
 mkdir -p /shares/inbox /run/samba /etc/samba/conf.d
@@ -45,6 +51,11 @@ case "$parse" in
         exit 1
         ;;
 esac
+
+if ! smb-sync volume; then
+    echo "samba volume check failed, refusing to start" >&2
+    exit 1
+fi
 
 # passdb is on the volume, but the unix accounts that smbd needs for a login
 # are gone after a recreation of the container. A failure does not stop the

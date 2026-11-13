@@ -24,6 +24,7 @@ from .planner import (
 from .service import (
     DEFAULT_HEARTBEAT_PATH,
     DEFAULT_LOCK_PATH,
+    check_volume,
     cycle_lock,
     heartbeat_is_fresh,
     observe,
@@ -53,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("run", help="run the sync daemon")
     sub.add_parser("status", help="show managed users")
     sub.add_parser("sync", help="run one reconcile cycle now")
+    sub.add_parser(
+        "volume", help="check that the samba volume fits UID_BASE and this version"
+    )
     return parser
 
 
@@ -211,6 +215,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"smb-sync: {exc}", file=sys.stderr)
             return 1
         return 0 if failures == 0 else 1
+    if args.command == "volume":
+        try:
+            reason = check_volume(system, cfg.uid_base)
+        except CommandError as exc:
+            print(f"smb-sync: {exc}", file=sys.stderr)
+            return 1
+        if reason is not None:
+            print(f"smb-sync: {reason}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "run":
         run_daemon(cfg, api, system)
         return 0

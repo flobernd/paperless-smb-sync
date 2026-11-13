@@ -10,13 +10,14 @@ from smb_sync.model import PaperlessUser, SambaAccount, TokenUser
 from smb_sync.paperless import PaperlessError
 from smb_sync.service import (
     WarningRepeat,
+    check_volume,
     heartbeat_is_fresh,
     restore_unix_accounts,
     run_cycle,
     run_cycle_locked,
     run_daemon,
 )
-from smb_sync.system import CommandError
+from smb_sync.system import CommandError, SystemAdapter
 
 CFG = Config(
     paperless_url="http://x",
@@ -289,6 +290,28 @@ def test_restore_continues_after_one_entry_fails():
     )
     assert restore_unix_accounts(system, 20000) == 1
     assert ("create_unix_user", "u20006", 20006) in system.calls
+
+
+OPERATOR_ENTRY = """\
+---------------
+Unix username:        desk
+Account Flags:        [U          ]
+Account desc:         Front desk scanner: do not delete
+"""
+
+
+def test_a_first_start_writes_the_base_and_a_map_with_the_last_line(tmp_path):
+    system = SystemAdapter(
+        str(tmp_path),
+        10000,
+        run=lambda argv, input_text=None: OPERATOR_ENTRY,
+        state_dir=str(tmp_path),
+    )
+    assert check_volume(system, 20000) is None
+    assert system.read_uid_base() == "20000"
+    assert system.read_usermap() == ("!nobody = *",)
+    # the next start finds the files of this one
+    assert check_volume(system, 20000) is None
 
 
 def test_daemon_drops_the_heartbeat_of_an_earlier_run(monkeypatch, tmp_path):

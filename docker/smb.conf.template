@@ -2,6 +2,7 @@
     server role = standalone server
     security = user
     map to guest = never
+    username map = /var/lib/samba/smb-sync-usermap
     server min protocol = SMB2
     ntlm auth = ntlmv2-only
     disable netbios = yes
@@ -13,8 +14,8 @@
     log level = 1
 
 [${SHARE_NAME}]
-    path = /shares/inbox/%U
-    valid users = @paperless
+    path = /shares/inbox/%u
+    valid users = @smb-sync
     browseable = yes
     read only = no
     create mask = 0660

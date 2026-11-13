@@ -457,6 +457,18 @@ def test_a_note_that_paperless_did_not_save_fails():
         )
 
 
+def test_a_notes_read_that_answers_an_error_object_fails_and_posts_nothing():
+    notes = f"{BASE}/api/documents/41/notes/"
+    client, session = make_client(
+        {notes: FakeResponse({"error": "Error retrieving notes, check logs for more detail."})}
+    )
+    with pytest.raises(PaperlessError, match="unexpected body"):
+        client.ensure_document_note(
+            41, "The username changed from 'dave' to 'erin'. The password is the same."
+        )
+    assert session.requests == []
+
+
 def test_delete_document_also_empties_it_from_the_trash():
     # a document that is already in the trash answers the DELETE with 404
     session = FakeSession({}, delete_status=404)

@@ -272,6 +272,50 @@ def test_a_member_whose_name_cannot_be_a_login_keeps_the_account_and_gets_no_doc
     assert any("Bad Name" in w for w in plan.warnings)
 
 
+@pytest.mark.parametrize("username", ["John.Doe", "anne-marie@example.com", "anna+scan", "Jörg"])
+def test_a_name_inside_the_set_of_paperless_gets_a_line(username):
+    assert planned([member(5, username)], state()).logins == {"u20005": username}
+
+
+@pytest.mark.parametrize("username", ["@alice", "+alice", "anna smith"])
+def test_a_member_whose_name_cannot_be_in_the_map_gets_no_account(username):
+    plan = planned([member(5, username)], state())
+    assert plan.actions == ()
+    assert any(username in w for w in plan.warnings)
+
+
+def test_of_two_new_members_equal_without_case_the_lowest_id_keeps_the_name():
+    first = member(5, "Alice")
+    plan = planned([member(6, "alice"), first], state())
+    assert plan.actions == (
+        WriteMap(("!u20005 = Alice", "!nobody = *")),
+        CreateAccount(user=first, uid=20005, upload=False),
+        CreateWorkflow(user_id=5, account="u20005"),
+    )
+    assert any("'alice'" in w for w in plan.warnings)
+
+
+def test_the_member_whose_account_has_the_name_in_the_map_keeps_it():
+    # user 6 has the login since the last write of the map, in another case than the username has now
+    users = [member(5, "ALICE"), member(6, "Alice")]
+    plan = planned(users, settled((6, "alice")))
+    assert plan.actions == (WriteMap(("!u20006 = Alice", "!nobody = *")),)
+    assert any("'ALICE'" in w for w in plan.warnings)
+
+
+@pytest.mark.parametrize(("first", "second"), [("straße", "strasse"), ("ßs", "sß")])
+def test_two_names_that_samba_tells_apart_both_get_a_line(first, second):
+    # casefold() gives one text for both names of a pair, and Samba compares character by character
+    users = [member(5, first), member(6, second)]
+    assert planned(users, state()).logins == {"u20005": first, "u20006": second}
+
+
+def test_two_names_that_samba_takes_for_one_get_one_line():
+    # Samba takes the final sigma and the sigma for one letter, and str.lower() keeps them apart
+    users = [member(5, "σοφος"), member(6, "σοφοσ")]
+    assert planned(users, state()).logins == {"u20005": "σοφος"}
+
+
 def test_a_waiting_document_goes_to_the_user_with_its_id_and_keeps_its_name():
     # uploaded for user 5 under the name alice, who is dave now, while user 9 took the name alice
     users = [member(5, "dave"), member(9, "alice")]

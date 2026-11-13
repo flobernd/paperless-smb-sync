@@ -185,11 +185,11 @@ def entry_mark(uid: int, joined: int) -> str:
     return f"smb-sync uid={uid} joined={joined}"
 
 
-def login_key(name: str) -> tuple[int, str]:
-    # Samba compares two names character by character and without case. So two
-    # names of another length are never one name, and casefold() alone takes
-    # straße and strasse for one.
-    return len(name), name.casefold()
+def login_key(name: str) -> tuple[str, ...]:
+    # Samba compares two names character by character and without case, and the
+    # casefold() form of a whole name can be equal for two names that differ in
+    # one place, such as ßs and sß.
+    return tuple(c.casefold() for c in name)
 
 
 def map_line(account: str, login: str) -> str:

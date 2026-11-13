@@ -27,6 +27,7 @@ from .model import (
     UpdateWorkflow,
     WriteMap,
     account_name,
+    login_key,
     map_line,
     map_logins,
     parse_mark,
@@ -37,9 +38,10 @@ NO_SUPERUSER_WARNING = (
     "credentials document is made"
 )
 
-# useradd-compatible names alone. A member with another name gets no line in
-# the map and a warning.
-_VALID_USERNAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+# Samba reads a name of the map that starts with @, + or & as a group or a
+# netgroup. The pattern is the username set of the paperless validator.
+_MAP_SIGNS = ("@", "+", "&")
+_PAPERLESS_USERNAME = re.compile(r"[\w.@+-]+")
 
 
 def counted_accounts(
@@ -65,6 +67,54 @@ def counted_accounts(
                 )
             )
     return tuple(sorted(counted, key=lambda a: a.uid))
+
+
+def _login_names(
+    members: Mapping[int, PaperlessUser], read_logins: Mapping[str, str]
+) -> tuple[dict[str, str], list[str]]:
+    warnings: list[str] = []
+    contenders: dict[tuple[str, ...], list[int]] = {}
+    for uid in sorted(members):
+        username = members[uid].username
+        if username.startswith(_MAP_SIGNS):
+            warnings.append(
+                f"user '{username}' gets no login name: a login name cannot start "
+                f"with '@', '+' or '&'. Rename the user in paperless."
+            )
+        elif _PAPERLESS_USERNAME.fullmatch(username) is None:
+            warnings.append(
+                f"user '{username}' gets no login name: a login name holds only "
+                f"letters, digits, '_', '.', '@', '+' and '-'. Rename the user in "
+                f"paperless."
+            )
+        else:
+            contenders.setdefault(login_key(username), []).append(uid)
+
+    kept: list[int] = []
+    for key, uids in contenders.items():
+        # The member who has the name in the map now keeps it, so that a user
+        # who takes the name in another case cannot take over the login of
+        # another person.
+        holders = [
+            uid
+            for uid in uids
+            if (login := read_logins.get(account_name(uid))) is not None
+            and login_key(login) == key
+        ]
+        keeper_uid = holders[0] if len(holders) == 1 else uids[0]
+        kept.append(keeper_uid)
+        keeper = members[keeper_uid]
+        for uid in uids:
+            if uid != keeper_uid:
+                user = members[uid]
+                warnings.append(
+                    f"user '{user.username}' (id {user.id}) gets no login name: "
+                    f"user '{keeper.username}' (id {keeper.id}) keeps this name, "
+                    f"and Samba compares login names without case. Rename one of "
+                    f"the two users in paperless."
+                )
+    logins = {account_name(uid): members[uid].username for uid in sorted(kept)}
+    return logins, warnings
 
 
 def _workflow_action(
@@ -199,6 +249,7 @@ def plan_cycle(
     entry_uids = {a.uid for a in counted}
     folders = {f.name: f for f in actual.folders}
     workflows = {w.name: w for w in actual.workflows}
+    read_logins = map_logins(actual.map_lines)
 
     delivery = actual.token_user
     if delivery is not None and not delivery.is_superuser:
@@ -207,16 +258,8 @@ def plan_cycle(
     # The lines are in the order of the uids, which does not change with a
     # rename or with the order in which paperless lists the users, so a map
     # that is up to date compares equal.
-    logins: dict[str, str] = {}
-    for uid in sorted(members):
-        user = members[uid]
-        if _VALID_USERNAME.match(user.username):
-            logins[account_name(uid)] = user.username
-        else:
-            warnings.append(
-                f"user '{user.username}' is not a valid unix account name and "
-                f"was skipped. Rename the user in paperless to provision it."
-            )
+    logins, name_warnings = _login_names(members, read_logins)
+    warnings.extend(name_warnings)
     lines = (
         *(map_line(account, login) for account, login in logins.items()),
         MAP_LAST_LINE,
@@ -226,10 +269,6 @@ def plan_cycle(
         # person a login name, and the map has to carry it by then.
         actions.append(WriteMap(lines=lines))
 
-    # This plan takes the line of an account that it removes out of the map,
-    # so the login name of such an account comes from the map as the cycle
-    # read it.
-    read_logins = map_logins(actual.map_lines)
     held: set[int] = set()
     for account in counted:
         user = members.get(account.uid)
@@ -241,6 +280,9 @@ def plan_cycle(
             )
             continue
         user_id = account.uid - uid_base
+        # This plan takes the line of an account that it removes out of the
+        # map, so the login name of such an account comes from the map as the
+        # cycle read it.
         login_name = read_logins.get(account.name)
         documents = _removal_documents(user_id, login_name, actual.documents, delivery)
         held.update(documents or ())

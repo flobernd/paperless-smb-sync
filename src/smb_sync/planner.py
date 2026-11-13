@@ -352,21 +352,10 @@ def plan_cycle(
                 f"samba account and was left untouched"
             )
 
-    # a removal closes the login as its first step, so an enabled entry is one
-    # that no removal has tried yet. Taking those first keeps a removal that
-    # fails in each cycle from holding the login of another former user open.
-    candidates = sorted(
-        stale_accounts, key=lambda name: (not stale_accounts[name].enabled, name)
-    )
-    for name in candidates[1:]:
-        warnings.append(
-            f"deprovisioning of '{name}' deferred to a later cycle (one per cycle)"
-        )
     if actual.token_user is not None and delivery is None:
         warnings.append(NO_SUPERUSER_WARNING)
-    deprovisioned = set(candidates[:1])
     held: set[int] = set()
-    for name in deprovisioned:
+    for name in sorted(stale_accounts):
         workflow = workflows_by_username.get(name)
         inbox = folders_by_name.get(name)
         documents = _removal_documents(
@@ -425,8 +414,4 @@ def plan_cycle(
             if action is not None:
                 actions.append(action)
 
-    return Plan(
-        actions=tuple(actions),
-        warnings=tuple(warnings),
-        pending_removal=tuple(candidates),
-    )
+    return Plan(actions=tuple(actions), warnings=tuple(warnings))

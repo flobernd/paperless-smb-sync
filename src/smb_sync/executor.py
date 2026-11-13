@@ -124,10 +124,12 @@ def _apply(
             delete_folder=delete_folder,
             documents=documents,
         ):
-            # A failed step ends the removal. The entry goes after the folder
-            # because it proves that the daemon made the folder, and while it
-            # exists the next cycle tries the removal again. The login closes
-            # first, so a removal that stops half way leaves no open login.
+            # A failed step ends the removal. The planner plans a removal only
+            # from a counted entry, so the entry goes last, and while it exists
+            # the next cycle tries the removal again. The retry still works
+            # once the unix account is gone, since smbpasswd -d and pdbedit -x
+            # need no unix account. The login closes first, so a removal that
+            # stops half way leaves no open login.
             system.disable_samba_account(username)
             if workflow_id is not None:
                 api.delete_workflow(workflow_id)
@@ -138,8 +140,8 @@ def _apply(
             if delete_folder:
                 system.delete_inbox_folder(username)
                 log.info("deleted inbox folder '%s' including contents", username)
-            system.delete_samba_account(username)
             system.delete_unix_user(username)
+            system.delete_samba_account(username)
             log.info("deleted samba account '%s'", username)
         case DisableAccount(username=username):
             system.disable_samba_account(username)

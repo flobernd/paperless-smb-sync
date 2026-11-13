@@ -198,8 +198,8 @@ def test_removal_without_the_folder_flag_leaves_the_folder():
     assert failures == 0
     assert system.calls == [
         ("disable_samba_account", "alice"),
-        ("delete_samba_account", "alice"),
         ("delete_unix_user", "alice"),
+        ("delete_samba_account", "alice"),
     ]
     assert api.calls == []
 

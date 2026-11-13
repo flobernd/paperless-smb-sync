@@ -168,29 +168,17 @@ def test_stale_account_keeps_a_folder_of_another_uid():
     )
 
 
-def test_at_most_one_deprovision_per_cycle():
+def test_each_removal_candidate_goes_in_the_cycle_that_finds_it():
+    # the removal of bob closed his login in an earlier cycle and then failed
     actual = state(
-        accounts=(
-            SambaAccount("alice", 20005, True),
-            SambaAccount("bob", 20006, True),
-        ),
+        accounts=(SambaAccount("alice", 20005, True), SambaAccount("bob", 20006, False)),
         folders=(InboxFolder("alice", 20005), InboxFolder("bob", 20006)),
-        workflows=(workflow(7, "alice", 9), workflow(8, "bob", 9)),
+        workflows=(workflow(7, "alice", 5), workflow(8, "bob", 6)),
     )
-    plan = planned([], actual)
-    removals = [a for a in plan.actions if isinstance(a, Deprovision)]
-    assert removals == [
-        Deprovision(
-            username="alice",
-            user_id=5,
-            workflow_id=7,
-            delete_folder=True,
-            documents=None,
-        )
-    ]
-    assert any("bob" in w and "deferred" in w for w in plan.warnings)
-    # the workflow of bob goes with his account, after his login closed
-    assert not any(isinstance(a, DeleteWorkflow) for a in plan.actions)
+    assert planned([], actual).actions == (
+        Deprovision(username="alice", user_id=5, workflow_id=7, delete_folder=True, documents=None),
+        Deprovision(username="bob", user_id=6, workflow_id=8, delete_folder=True, documents=None),
+    )
 
 
 def test_workflow_without_account_and_user_is_deleted():
@@ -220,29 +208,6 @@ def test_removal_of_an_old_name_keeps_a_folder_with_the_uid_of_a_user():
         )
         in plan.actions
     )
-
-
-def test_a_removal_that_stopped_does_not_hold_back_an_open_login():
-    # the removal of alice closed her login in an earlier cycle and then failed
-    actual = state(
-        accounts=(
-            SambaAccount("alice", 20005, False),
-            SambaAccount("bob", 20006, True),
-        ),
-        folders=(),
-        workflows=(),
-    )
-    plan = planned([], actual)
-    assert plan.actions == (
-        Deprovision(
-            username="bob",
-            user_id=6,
-            workflow_id=None,
-            delete_folder=False,
-            documents=None,
-        ),
-    )
-    assert any("alice" in w for w in plan.warnings)
 
 
 def test_rename_detected_by_uid():
@@ -526,13 +491,8 @@ def test_removal_takes_the_documents_of_that_account_only():
         ),
     )
     assert planned([], actual).actions == (
-        Deprovision(
-            username="alice",
-            user_id=5,
-            workflow_id=7,
-            delete_folder=True,
-            documents=(40, 43),
-        ),
+        Deprovision(username="alice", user_id=5, workflow_id=7, delete_folder=True, documents=(40, 43)),
+        Deprovision(username="bob", user_id=6, workflow_id=None, delete_folder=False, documents=(41, 42)),
     )
 
 

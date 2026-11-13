@@ -5,7 +5,7 @@ import time
 
 from .config import Config, load_config
 from .credentials import credentials_block, generate_password
-from .model import ActualState, PaperlessUser, Plan, RenameUser
+from .model import ActualState, Deprovision, PaperlessUser, Plan, RenameUser
 from .paperless import PaperlessClient, PaperlessError
 from .planner import (
     NO_SUPERUSER_WARNING,
@@ -62,6 +62,7 @@ def format_status(
         for a in plan.actions
         if isinstance(a, RenameUser)
     }
+    removals = {a.username for a in plan.actions if isinstance(a, Deprovision)}
 
     def status_row(username: str, uid: int | None, samba: str) -> tuple[str, ...]:
         return (
@@ -87,7 +88,7 @@ def format_status(
             continue
         if account.username in renamed_to:
             samba = f"renaming to {renamed_to[account.username]}"
-        elif account.username in plan.pending_removal:
+        elif account.username in removals:
             samba = "pending removal"
         else:
             samba = "left untouched"

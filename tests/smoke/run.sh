@@ -322,7 +322,7 @@ CAROL=$(account_of "$USER_ID")
 echo "== starting smb container =="
 compose up -d smb
 wait_for "samba account of carol did not appear" has_account "$CAROL"
-# the cycle after the creation makes the folder
+# the creation makes the folder after the entry
 wait_for "inbox folder of carol did not appear" \
     compose exec -T smb test -d "/shares/inbox/$CAROL"
 
@@ -579,6 +579,30 @@ api -X PATCH "$API/api/users/$DAVE_ID/" -d '{"is_active":true}' >/dev/null \
     || fail "could not activate dave"
 quiet_cycle
 smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once he was active again"
+
+echo "== asserting a closed login while a link stands for the folder =="
+# smbd follows a link under the account name. The link points to the folder
+# of dave himself, so a daemon that took the link for the folder would find
+# the right owner and open the login.
+compose exec -T smb sh -c "mv /shares/inbox/$DAVE /shares/inbox/moved-$DAVE &&
+    ln -s /shares/inbox/moved-$DAVE /shares/inbox/$DAVE" \
+    || fail "could not put a link in place of the folder of dave"
+# The creation of the folder follows no link, so this cycle has one failed
+# action, and the sync command exits with 1.
+code=0
+LAST_CYCLE=$(cycle 2>&1) || code=$?
+[ "$code" = 1 ] || fail "the cycle with a link for the folder of dave ended with the code $code"
+[ "$(grep -c ' failed: ' <<<"$LAST_CYCLE")" = 1 ] \
+    || fail "the cycle with a link for the folder of dave did not fail exactly one action"
+grep -qF "action CreateFolder(account='$DAVE', uid=${DAVE#u}) failed: " <<<"$LAST_CYCLE" \
+    || fail "the failed action of the cycle with a link is not the folder of dave"
+entry_closed "$DAVE" || fail "the entry of dave stayed open with a link for his folder"
+login_refused dave "$DAVE_PASSWORD" NT_STATUS_ACCOUNT_DISABLED \
+    || fail "the login of dave stayed open with a link for his folder"
+compose exec -T smb sh -c "rm /shares/inbox/$DAVE && mv /shares/inbox/moved-$DAVE /shares/inbox/$DAVE" \
+    || fail "could not put the folder of dave back"
+quiet_cycle
+smb_login dave "$DAVE_PASSWORD" || fail "dave could not log in once his folder was back"
 
 echo "== asserting the hold for an entry of another join date =="
 ERIN_ID=$(api -X POST "$API/api/users/" \

@@ -96,10 +96,11 @@ follow a link of the paperless container, so it cannot resolve the path itself.
 The inbox folders belong to the group with the id `PAPERLESS_GID`, so paperless needs that group id to read them. In the
 official paperless-ngx image, `USERMAP_GID` sets it.
 
-In each cycle the daemon compares a managed workflow with its definition in the fields that it sets: the enabled flag,
-the single trigger (its type, source, and filter), the single action (its type and owner), the view and the change
-users, and the view and the change groups, which are empty. When one of them differs, the daemon writes the full
-definition back, and a field that it does not set, such as a tag of the action, is lost then.
+In each cycle the daemon compares a managed workflow with its definition: the enabled flag, the single trigger (its
+type, source, and path filter, and its file name filter and mail rule, which must be empty), the single action (its type
+and owner), the view and the change users, and the view and the change groups, which are empty. When one of them
+differs, the daemon writes the full definition back, and a field that it does not set and does not compare, such as a
+tag of the action, is lost then.
 
 The daemon opens the login of an account only while the member is active and the workflow exists and matches that
 definition, since paperless imports a scan without the workflow too, and only the workflow gives the scan its owner. It

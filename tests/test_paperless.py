@@ -193,6 +193,7 @@ def definition(**changes):
         "sources": [1],
         "filter_path": "/data/consume/alice/*",
         "filter_filename": None,
+        "filter_mailrule": None,
     }
     action = {
         "id": 12,
@@ -233,6 +234,8 @@ def test_a_workflow_with_each_field_of_the_definition_is_defined_for_its_owner()
         {"trigger": {"type": 2}},
         {"trigger": {"sources": [1, 2]}},
         {"trigger": {"filter_path": "*/alice/*"}},
+        {"trigger": {"filter_filename": "*.pdf"}},
+        {"trigger": {"filter_mailrule": 3}},
         {"actions": [{"type": 1, "assign_owner": 6}]},
         {"action": {"type": 2}},
         {"action": {"assign_owner": 6}},

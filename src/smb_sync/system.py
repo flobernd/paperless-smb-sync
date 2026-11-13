@@ -45,8 +45,9 @@ def _raise_error(error: OSError) -> None:
 
 def _replace_file(path: Path, text: str) -> None:
     # After a power loss, a file that was moved before its content reached the
-    # disk can be empty. An empty map gives no login, and an empty base file
-    # refuses each later start.
+    # disk can be empty. Under an empty map each login name fails and each
+    # account name is a login name, and an empty base file refuses each later
+    # start.
     fresh = path.with_name(f"{path.name}.new")
     with open(fresh, "w", encoding="utf-8") as fh:
         fh.write(text)

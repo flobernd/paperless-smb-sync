@@ -331,11 +331,12 @@ The Samba volume holds the state above.
 
 Stop the container first, which ends the logins of 0.1.0, so no scan arrives after you checked the folders. Paperless
 still reads the inbox folders, and the workflows of 0.1.0 still give each waiting scan its owner, so let paperless
-consume those scans. Delete the credentials documents of 0.1.0 in paperless by hand, since the daemon takes such a
-document for its own, and `regen` can then write a new password into the old document instead of the new one. Then empty
-the Samba volume, and remove the inbox folders of 0.1.0 from the inbox volume, which is also the consumption directory
-of paperless. The daemon leaves a folder of 0.1.0 in place with a warning, and it makes no account whose name such a
-folder has. In its first cycle the daemon removes the workflows of 0.1.0 by itself.
+consume those scans. Check that paperless consumed them and that each inbox folder is empty. Delete the credentials
+documents of 0.1.0 in paperless by hand, since the daemon takes such a document for its own, and `regen` can then write
+a new password into the old document instead of the new one. Then empty the Samba volume, and remove the inbox folders
+of 0.1.0 from the inbox volume, which is also the consumption directory of paperless. A folder of 0.1.0 that stays gives
+a warning and stops no account. Only a folder with the name of an account, such as `u20005`, stops the creation of that
+account. In its first cycle the daemon removes the workflows of 0.1.0 by itself.
 
 A share of a 0.1.0 drop-in that names `@paperless` in `valid users` or `%U` in its path needs a change: the accounts are
 members of the group `smb-sync` and no longer of `paperless`, so `@paperless` admits none of them, and `%U` is now the

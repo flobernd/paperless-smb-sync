@@ -157,11 +157,21 @@ def _member_actions(
         actions.append(RepairUnixAccount(account=account.name, uid=account.uid))
     # paperless imports a scan with or without a workflow, and only a workflow
     # that is the full definition for this member gives the scan its owner.
-    # The login closes before the workflow is written back and opens in a
-    # later cycle that finds the workflow, so a failed write leaves it closed.
+    # smbd follows a link under the account name, so without the folder in
+    # this rule a session can work in a folder that the daemon did not make
+    # for the account. The observation lists no link as a folder. The group
+    # stays out of the rule, so a change of PAPERLESS_GID closes no login.
+    # The login closes before the workflow is written back or the folder is
+    # made or given its owner, and it opens in a later cycle that finds both,
+    # so a step that fails leaves it closed.
     workflow = workflows.get(account.name)
+    folder = folders.get(account.name)
     may_open = (
-        user.is_active and workflow is not None and workflow.defined_for == user.id
+        user.is_active
+        and workflow is not None
+        and workflow.defined_for == user.id
+        and folder is not None
+        and folder.uid == account.uid
     )
     if (account.enabled or account.name in session_accounts) and not may_open:
         actions.append(DisableAccount(account=account.name))
@@ -169,7 +179,6 @@ def _member_actions(
     # owner also takes over a folder of that name under another uid. paperless
     # enters a folder of mode 2770 through its group alone, so a folder that
     # kept the group from before a change of PAPERLESS_GID is repaired too.
-    folder = folders.get(account.name)
     if folder is None:
         actions.append(CreateFolder(account=account.name, uid=account.uid))
     elif folder.uid != account.uid or folder.gid != paperless_gid:
@@ -395,7 +404,8 @@ def plan_cycle(
         if account not in logins or uid in entry_uids:
             continue
         user = members[uid]
-        # the cycle after this one finds the entry and makes the folder
+        # the creation makes the folder itself, and the cycle after this one
+        # finds the workflow and the folder and opens the login
         actions.append(CreateAccount(user=user, uid=uid, upload=delivery is not None))
         # a workflow that is left under the account name belongs to this
         # account

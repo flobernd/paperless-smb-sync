@@ -145,6 +145,12 @@ def _apply(
             )
             if upload:
                 _upload_credentials(api, smb_host, share_name, user, password)
+            # The folder goes after the mark, since a folder under the name of
+            # an account without a counted entry stops the account of the
+            # member. It goes after the upload, so a folder that cannot be made
+            # loses no credentials document.
+            system.create_inbox_folder(account, uid)
+            log.info("created inbox folder '%s'", account)
         case RepairUnixAccount(account=account, uid=uid):
             system.create_unix_user(account, uid)
             log.warning(

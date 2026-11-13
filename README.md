@@ -102,11 +102,13 @@ and owner), the view and the change users, and the view and the change groups, w
 differs, the daemon writes the full definition back, and a field that it does not set and does not compare, such as a
 tag of the action, is lost then.
 
-The daemon opens the login of an account only while the member is active and the workflow exists and matches that
-definition, since paperless imports a scan without the workflow too, and only the workflow gives the scan its owner. It
-checks this once in each cycle, so after a deactivation or the deletion of the workflow the login stays open until the
-next cycle. A new account opens in the cycle after its creation, and a workflow that a person deleted, disabled, or
-changed in another of these fields closes the login for one cycle.
+The daemon opens the login of an account only while the member is active, the workflow exists and matches that
+definition, and the inbox folder of the account is a directory with the uid as its owner. The workflow counts since
+paperless imports a scan without it too, and only the workflow gives the scan its owner. The daemon checks this once in
+each cycle, so after a deactivation or the deletion of the workflow the login stays open until the next cycle. A new
+account opens in the cycle after its creation, and a workflow that a person deleted, disabled, or changed in another of
+these fields closes the login for one cycle. An inbox folder that is gone, that is a link, or that has another owner
+closes the login until a cycle finds the folder again, and the daemon makes or repairs the folder where it can.
 
 To give other users or groups a right on each scan of a user, make a second workflow without the prefix, with a
 consumption trigger, the path filter of the inbox folder, and an action that gives the right and sets no owner.

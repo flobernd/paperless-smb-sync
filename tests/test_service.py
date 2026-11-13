@@ -107,6 +107,9 @@ class FakeSystem:
     def disable_samba_account(self, account):
         self.calls.append(("disable_samba_account", account))
 
+    def create_inbox_folder(self, username, uid):
+        self.calls.append(("create_inbox_folder", username, uid))
+
 
 def test_api_failure_skips_cycle_without_touching_system():
     api = FakeApi(fail=True)

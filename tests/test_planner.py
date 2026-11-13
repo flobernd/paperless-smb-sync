@@ -134,6 +134,13 @@ def test_a_closed_login_stays_closed_while_its_workflow_is_missing():
     )
 
 
+def test_a_closed_login_stays_closed_in_the_cycle_that_makes_its_folder():
+    actual = replace(settled((5, "alice")), accounts=(entry(5, enabled=False),), folders=())
+    assert planned([member(5, "alice")], actual).actions == (
+        CreateFolder(account="u20005", uid=20005),
+    )
+
+
 def test_a_missing_folder_and_a_missing_workflow_are_made_again():
     actual = replace(settled((5, "alice")), folders=(), workflows=())
     assert planned([member(5, "alice")], actual).actions == (
@@ -155,13 +162,26 @@ def test_a_workflow_that_is_no_definition_for_its_member_is_written_back(defined
 
 
 @pytest.mark.parametrize(
-    "found",
-    [InboxFolder("u20005", 1000, 10000), InboxFolder("u20005", 20005, 100)],
+    ("found", "actions"),
+    [
+        (
+            InboxFolder("u20005", 1000, 10000),
+            (DisableAccount(account="u20005"), RepairFolder(account="u20005", uid=20005)),
+        ),
+        (InboxFolder("u20005", 20005, 100), (RepairFolder(account="u20005", uid=20005),)),
+    ],
 )
-def test_a_folder_with_another_owner_or_group_is_repaired(found):
+def test_a_folder_with_another_owner_or_group_is_repaired(found, actions):
     actual = replace(settled((5, "alice")), folders=(found,))
+    assert planned([member(5, "alice")], actual).actions == actions
+
+
+def test_an_open_login_closes_while_its_folder_is_gone():
+    # the listing leaves out a link, so a link under the account name reads as a folder that is gone
+    actual = replace(settled((5, "alice")), folders=())
     assert planned([member(5, "alice")], actual).actions == (
-        RepairFolder(account="u20005", uid=20005),
+        DisableAccount(account="u20005"),
+        CreateFolder(account="u20005", uid=20005),
     )
 
 
@@ -358,6 +378,7 @@ def test_a_hold_creates_no_account_and_still_repairs():
     )
     assert planned(users, actual).actions == (
         DisableAccount(account="u20005"),
+        DisableAccount(account="u20007"),
         CreateFolder(account="u20007", uid=20007),
     )
 

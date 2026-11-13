@@ -113,13 +113,34 @@ def member(user_id, username, active=True):
     return PaperlessUser(user_id, username, active, 1731405600123, True)
 
 
-def test_a_creation_whose_mark_write_fails_hands_out_no_password():
+def test_a_creation_whose_mark_write_fails_stops_there():
     failures, system, api = run(
         [CreateAccount(user=member(5, "alice"), uid=20005, upload=True)],
         system=FakeSystem(fail_on="store_mark"),
     )
     assert failures == 1
     assert api.calls == []
+    assert "create_inbox_folder" not in [call[0] for call in system.calls]
+
+
+def test_a_creation_makes_the_folder_as_its_last_step():
+    _, system, api = run(
+        [CreateAccount(user=member(5, "alice"), uid=20005, upload=True)]
+    )
+    assert system.calls[-2:] == [
+        ("store_mark", "u20005", 20005, 1731405600123),
+        ("create_inbox_folder", "u20005", 20005),
+    ]
+    assert api.calls == [("upload_credentials", 5, "alice")]
+
+
+def test_a_creation_whose_folder_step_fails_keeps_its_document():
+    failures, _, api = run(
+        [CreateAccount(user=member(5, "alice"), uid=20005, upload=True)],
+        system=FakeSystem(fail_on="create_inbox_folder"),
+    )
+    assert failures == 1
+    assert api.calls == [("upload_credentials", 5, "alice")]
 
 
 def test_a_creation_whose_disable_fails_leaves_an_entry_without_the_mark():
